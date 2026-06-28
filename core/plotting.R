@@ -49,15 +49,28 @@ generate_violin <- function(df, score_col, group_col, title, filename, si, out_r
   if (length(tb) < 2) return(invisible(NULL))
 
   out_path <- file.path(route_folder(out_root, module, "violin", si), paste0(filename, ".png"))
-  sm   <- d %>% dplyr::group_by(.data[[group_col]]) %>% dplyr::summarise(n = dplyr::n(), .groups = "drop")
+
+  # Balanced subsample for visualisation (statistics use the full data above)
+  n_bal <- min(tb)
+  set.seed(42)
+  d_plot <- d %>%
+    dplyr::group_by(.data[[group_col]]) %>%
+    dplyr::slice_sample(n = n_bal) %>%
+    dplyr::ungroup()
+
+  sm   <- d_plot %>% dplyr::group_by(.data[[group_col]]) %>% dplyr::summarise(n = dplyr::n(), .groups = "drop")
   lbls <- setNames(paste0(sm[[group_col]], "\n(n=", sm$n, ")"), sm[[group_col]])
   ann  <- paste(Filter(nchar, c(
     if (!is.na(si$fdr_p))    sprintf("FDR p = %.3g", si$fdr_p) else "FDR p = N/A",
     if (!is.na(si$effect_r)) sprintf("r = %.3f", si$effect_r)  else "")),
     collapse = "  |  ")
 
-  p <- ggplot2::ggplot(d, ggplot2::aes(x = .data[[group_col]], y = .data[[score_col]],
-                                       fill = .data[[group_col]])) +
+  bal_subtitle <- sprintf("Balanced subsample (n=%d per group)", n_bal)
+  sig_subtitle <- if (!si$testable) "Not testable (insufficient data)"
+                  else if (si$sig) "FDR Significant (p < 0.05)" else "Not FDR Significant"
+
+  p <- ggplot2::ggplot(d_plot, ggplot2::aes(x = .data[[group_col]], y = .data[[score_col]],
+                                            fill = .data[[group_col]])) +
     ggplot2::geom_violin(alpha = 0.8, trim = FALSE) +
     ggplot2::geom_boxplot(width = 0.15, fill = "white", alpha = 0.9, outlier.shape = NA) +
     ggplot2::scale_fill_manual(values = pub_palette) +
@@ -65,8 +78,7 @@ generate_violin <- function(df, score_col, group_col, title, filename, si, out_r
     ggplot2::annotate("text", x = 1.5, y = Inf, vjust = 2, label = ann,
                       size = 4, fontface = "italic", colour = "grey30") +
     ggplot2::labs(title = title,
-                  subtitle = if (!si$testable) "Not testable (insufficient data)"
-                             else if (si$sig) "FDR Significant (p < 0.05)" else "Not FDR Significant",
+                  subtitle = paste0(sig_subtitle, "  |  ", bal_subtitle),
                   x = NULL, y = paste0("ssGSEA: ", sub(SCORE_SUFFIX, "", score_col))) +
     pub_theme + ggplot2::theme(legend.position = "none")
   ggplot2::ggsave(out_path, p, width = 7, height = 6, dpi = 300, bg = "white")
