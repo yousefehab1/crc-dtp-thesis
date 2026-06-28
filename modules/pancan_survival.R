@@ -54,13 +54,17 @@
     df$tpm_unstranded[match(gene_ann$gene_id, df$gene_id)]
   }, numeric(nrow(gene_ann)))
 
-  # Column names: prefer sample barcode, fall back to case/patient ID
-  barcodes <- if ("sample.submitter_id" %in% colnames(manifest))
-    manifest$sample.submitter_id
-  else if ("cases.submitter_id" %in% colnames(manifest))
-    manifest$cases.submitter_id
-  else
-    manifest$cases
+  # Column names: prefer sample barcode, fall back to case/patient ID.
+  # Guard: stop with a clear message if none of the expected columns exist.
+  barcode_col <- intersect(c("sample.submitter_id", "cases.submitter_id", "cases"),
+                           colnames(manifest))[1]
+  if (is.na(barcode_col))
+    stop("Cannot find a barcode column in GDC manifest. Available: ",
+         paste(colnames(manifest), collapse = ", "))
+  barcodes <- manifest[[barcode_col]]
+  if (anyNA(barcodes) || length(barcodes) != ncol(tpm_mat))
+    stop(sprintf("Barcode vector length (%d) != matrix columns (%d); NAs: %d",
+                 length(barcodes), ncol(tpm_mat), sum(is.na(barcodes))))
   colnames(tpm_mat) <- barcodes
 
   # sample_type: use manifest column if present, else infer from barcode
