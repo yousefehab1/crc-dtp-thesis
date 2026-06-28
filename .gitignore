@@ -1,0 +1,27 @@
+# ── Downloaded TCGA/GEO data (large, reproducible via pipeline) ───────────────
+GDCdata/
+cache/
+
+# ── Pipeline output runs ───────────────────────────────────────────────────────
+CRC_DTP_*/
+
+# ── Large intermediate R objects ───────────────────────────────────────────────
+*.rds
+*.RData
+*.rda
+
+# ── R / RStudio ────────────────────────────────────────────────────────────────
+.Rhistory
+.RData
+.Ruserdata
+*.Rproj.user/
+**/.Rproj.user/
+
+# ── macOS ─────────────────────────────────────────────────────────────────────
+.DS_Store
+**/.DS_Store
+
+# ── Misc ──────────────────────────────────────────────────────────────────────
+MANIFEST.txt
+.Rapp.history
+**/.Rapp.history
