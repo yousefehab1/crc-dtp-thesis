@@ -19,32 +19,88 @@
   any(grepl("timeout|connection|network|curl|ssl|503|502|500|temporarily", msg))
 }
 
-# GDCprepare with clinical-annotation fallback.
-# TCGAbiolinks adds GDC clinical data onto the SE colData. This step sometimes
-# fails with vctrs_error_subscript_oob due to a column-type mismatch in the
-# GDC clinical manifest. Since the pipeline only needs expression data from the
-# SE (clinical comes from CDR), we can safely skip that step by temporarily
-# replacing the internal adder with a no-op.
+# Build a minimal SummarizedExperiment directly from the downloaded STAR-Counts
+# TSV files, bypassing GDCprepare entirely.  Used as a fallback when
+# GDCprepare's clinical-annotation step crashes with vctrs_error_subscript_oob.
+# The resulting SE has exactly what prep_tcga_tpm() needs:
+#   - assay "tpm_unstrand"
+#   - rowData: gene_id, gene_name
+#   - colData: sample_type  (inferred from the TCGA barcode sample-code field)
+.read_star_tpm_as_se <- function(query) {
+  manifest <- as.data.frame(TCGAbiolinks::getResults(query))
+  proj     <- manifest$project[1]
+  gdc_dir  <- file.path("GDCdata", proj,
+                        "Transcriptome_Profiling",
+                        "Gene_Expression_Quantification")
+
+  # Locate one TSV per file-UUID directory
+  tsv_paths <- vapply(manifest$id, function(fid) {
+    d <- file.path(gdc_dir, fid)
+    f <- list.files(d, pattern = "\\.tsv$", full.names = TRUE)
+    if (length(f) == 0) stop("No TSV found in: ", d)
+    f[1]
+  }, character(1))
+
+  # Gene annotation from the first file (identical across all samples)
+  gene_ann <- readr::read_tsv(tsv_paths[1], comment = "#", show_col_types = FALSE) %>%
+    dplyr::filter(!grepl("^N_", gene_id)) %>%
+    dplyr::select(gene_id, gene_name)
+
+  # TPM matrix: genes × samples  (vapply → nrow(gene_ann) × n_samples)
+  tpm_mat <- vapply(tsv_paths, function(f) {
+    df <- readr::read_tsv(f, comment = "#", show_col_types = FALSE,
+                          col_select = c("gene_id", "tpm_unstranded")) %>%
+      dplyr::filter(!grepl("^N_", gene_id))
+    df$tpm_unstranded[match(gene_ann$gene_id, df$gene_id)]
+  }, numeric(nrow(gene_ann)))
+
+  # Column names: prefer sample barcode, fall back to case/patient ID
+  barcodes <- if ("sample.submitter_id" %in% colnames(manifest))
+    manifest$sample.submitter_id
+  else if ("cases.submitter_id" %in% colnames(manifest))
+    manifest$cases.submitter_id
+  else
+    manifest$cases
+  colnames(tpm_mat) <- barcodes
+
+  # sample_type: use manifest column if present, else infer from barcode
+  # TCGA barcode field 4 (1-based, 14-15 chars): "01"=Primary, "06"=Metastatic, "11"=Normal
+  sample_type <- if ("sample_type" %in% colnames(manifest)) {
+    manifest$sample_type
+  } else {
+    codes <- substr(barcodes, 14, 15)
+    dplyr::case_when(
+      codes == "01" ~ "Primary Tumor",
+      codes == "06" ~ "Metastatic",
+      codes == "11" ~ "Solid Tissue Normal",
+      TRUE          ~ paste0("Sample_", codes)
+    )
+  }
+
+  SummarizedExperiment::SummarizedExperiment(
+    assays  = list(tpm_unstrand = tpm_mat),
+    rowData = S4Vectors::DataFrame(gene_id   = gene_ann$gene_id,
+                                   gene_name = gene_ann$gene_name,
+                                   row.names = gene_ann$gene_id),
+    colData = S4Vectors::DataFrame(sample_type = sample_type,
+                                   row.names   = barcodes)
+  )
+}
+
+# GDCprepare with direct-read fallback.
+# If GDCprepare fails with vctrs_error_subscript_oob (TCGAbiolinks clinical
+# annotation bug), we fall back to reading the already-downloaded TSV files
+# directly.  All other errors are re-raised.
 .gdc_prepare_safe <- function(query) {
   se <- tryCatch(TCGAbiolinks::GDCprepare(query), error = function(e) e)
   if (!inherits(se, "error")) return(se)
 
-  # Only attempt the workaround for clinical-annotation failures
   is_clinical_err <- inherits(se, "vctrs_error_subscript_oob") ||
-    grepl("subscript.*out of bounds|vctrs_error_subscript", class(se)[1], ignore.case = TRUE)
+    any(grepl("vctrs_error_subscript", class(se), ignore.case = TRUE))
   if (!is_clinical_err) stop(se)
 
-  message("   -> GDCprepare clinical annotation failed; retrying without clinical colData")
-  tcga_ns <- asNamespace("TCGAbiolinks")
-  # TCGAbiolinks ≥ 2.28 uses .add_clinical; older versions use addClinical
-  fn_name <- intersect(c(".add_clinical", "addClinical", ".addClinical"),
-                       ls(tcga_ns, all.names = TRUE))[1]
-  if (is.na(fn_name)) stop(se)   # can't patch — re-raise original error
-
-  orig_fn <- get(fn_name, envir = tcga_ns)
-  on.exit(assignInNamespace(fn_name, orig_fn, ns = "TCGAbiolinks"), add = TRUE)
-  assignInNamespace(fn_name, function(data, ...) data, ns = "TCGAbiolinks")
-  TCGAbiolinks::GDCprepare(query)
+  message("   -> clinical annotation failed; reading TSV files directly")
+  .read_star_tpm_as_se(query)
 }
 
 # Download + prepare one TCGA project with up to 3 retries on transient
