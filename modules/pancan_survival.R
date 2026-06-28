@@ -188,6 +188,28 @@ run_pancan_survival <- function(out_root, panel,
   valid_projects <- cohort_summary %>%
     dplyr::filter(!Project_ID %in% EXCLUDE_PROJECTS, CDR_Patients >= MIN_COHORT_N) %>%
     dplyr::pull(Project_ID)
+
+  excluded_df <- cohort_summary %>%
+    dplyr::mutate(
+      Excluded = Project_ID %in% EXCLUDE_PROJECTS | CDR_Patients < MIN_COHORT_N,
+      Reason   = dplyr::case_when(
+        Project_ID %in% EXCLUDE_PROJECTS ~ paste0("Manually excluded (non-solid / DTP N/A): ",
+                                                   paste(EXCLUDE_PROJECTS, collapse = ", ")),
+        CDR_Patients < MIN_COHORT_N      ~ sprintf("Too few CDR patients (%d < threshold %d)",
+                                                    CDR_Patients, MIN_COHORT_N),
+        TRUE ~ NA_character_
+      )
+    ) %>%
+    dplyr::filter(Excluded) %>%
+    dplyr::select(Project_ID, CDR_Patients, Reason)
+
+  if (nrow(excluded_df) > 0) {
+    message(sprintf("\n--- Pre-queue exclusions (%d cancer type(s)) ---", nrow(excluded_df)))
+    for (i in seq_len(nrow(excluded_df)))
+      message(sprintf("  [EXCLUDED] %-15s  n=%4d  |  %s",
+                      excluded_df$Project_ID[i], excluded_df$CDR_Patients[i], excluded_df$Reason[i]))
+    message("---")
+  }
   message(sprintf("%d projects queued.", length(valid_projects)))
 
   # ---- Phase 2: per-cohort RNA-seq -> ssGSEA -> clinical (checkpointed) -------
@@ -288,13 +310,14 @@ run_pancan_survival <- function(out_root, panel,
                stringsAsFactors = FALSE)
   }))
   write.csv(summary_df, file.path(out_root, module, "cohort_run_summary.csv"), row.names = FALSE)
+  write.csv(excluded_df, file.path(out_root, module, "cohort_prequeu_exclusions.csv"), row.names = FALSE)
 
   n_ok   <- sum(grepl("^Success", summary_df$Status))
   n_skip <- sum(summary_df$Status == "Skipped")
   n_fail <- sum(summary_df$Status == "Failed")
   message(sprintf(
-    "\n========== PAN-CANCER COHORT SUMMARY ==========\n  Succeeded : %d\n  Skipped   : %d\n  Failed    : %d\n  Total     : %d",
-    n_ok, n_skip, n_fail, nrow(summary_df)))
+    "\n========== PAN-CANCER COHORT SUMMARY ==========\n  Succeeded : %d\n  Skipped   : %d\n  Failed    : %d\n  Pre-queue excluded: %d\n  Total queued: %d",
+    n_ok, n_skip, n_fail, nrow(excluded_df), nrow(summary_df)))
   if (n_skip + n_fail > 0) {
     not_ok <- summary_df[summary_df$Status %in% c("Skipped", "Failed"), , drop = FALSE]
     max_proj <- max(nchar(not_ok$Project))
