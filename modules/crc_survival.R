@@ -1,0 +1,203 @@
+# ==============================================================================
+# modules/crc_survival.R  —  CRC ssGSEA & survival (GSE39582 + TCGA-COAD).
+# Was Final.R. Subtyping (CMS/CRIS/PDS) has been pulled out to
+# subtyping/crc_subtyping.R (#11) and is NOT run here.
+#
+# Fixes applied: TPM for TCGA (#2a/#2b), log-space collapse (#3), shared CDR
+# endpoint=PFI (#4), Dead/Alive labels (#5), censoring-aware endpoints (#6),
+# continuous-score Cox (#7), effect size + 3-way routing (#8), gating (#9),
+# primary-only (#17). FDR is PROVISIONAL (#10): by=Dataset×Project×Test×Metric.
+# ==============================================================================
+
+run_crc_survival <- function(out_root, panel, crc_signatures = NULL) {
+  module <- "crc_survival"
+  message("\n==================== MODULE: CRC SURVIVAL ====================")
+  dir.create(file.path(out_root, module), recursive = TRUE, showWarnings = FALSE)
+  gs         <- build_gene_sets(panel, which = crc_signatures)   # NULL = whole panel
+  all_stats  <- list()
+
+  # ------------------------------------------------------------------------
+  # PART A — GSE39582 (Affymetrix microarray)
+  # ------------------------------------------------------------------------
+  message("\n--- GSE39582 ---")
+  eset    <- cache_rds("GSE39582_eset", function() { g <- GEOquery::getGEO("GSE39582", GSEMatrix = TRUE); g[[1]] })
+  mat_sym <- prep_microarray_symbols(Biobase::exprs(eset))
+
+  scores_gse <- run_ssgsea(mat_sym, gs)
+  scores_gse <- add_composite(scores_gse)
+  scores_gse$Sample_ID <- rownames(scores_gse)
+  score_cols <- setdiff(colnames(scores_gse), "Sample_ID")
+
+  clinical_df <- as.data.frame(Biobase::pData(eset))
+
+  # GEO characteristics_ch1.N are positional — verify field order is consistent
+  # across all samples before trusting the hardcoded index map (kept from Final.R).
+  characteristics_cols_used <- c(
+    "characteristics_ch1.2",  "characteristics_ch1.3",  "characteristics_ch1.4",
+    "characteristics_ch1.9",  "characteristics_ch1.11", "characteristics_ch1.12",
+    "characteristics_ch1.13", "characteristics_ch1.14", "characteristics_ch1.15",
+    "characteristics_ch1.18", "characteristics_ch1.22", "characteristics_ch1.26")
+  consistency_issues <- character(0)
+  for (col in characteristics_cols_used) {
+    vals   <- clinical_df[[col]]; vals <- vals[!is.na(vals)]
+    labels <- unique(trimws(sub(":.*$", "", vals)))
+    if (length(labels) > 1)
+      consistency_issues <- c(consistency_issues,
+                              paste0(col, " has ", length(labels), " labels: ", paste(labels, collapse = ", ")))
+  }
+  if (length(consistency_issues) > 0)
+    stop("GSE39582 characteristics_ch1.N field order inconsistent:\n",
+         paste(consistency_issues, collapse = "\n"))
+
+  parse_numeric_field <- function(raw, field_name) {
+    stripped <- stringr::str_remove(raw, "^.*: ")
+    out      <- suppressWarnings(as.numeric(stripped))
+    newly_na <- is.na(out) & !is.na(stripped)
+    if (any(newly_na))
+      message(sprintf("  %s: %d value(s) unparseable; e.g. %s", field_name, sum(newly_na),
+                      paste(unique(stripped[newly_na])[seq_len(min(5, sum(newly_na)))], collapse = " | ")))
+    out
+  }
+
+  clinical <- clinical_df %>%
+    tibble::rownames_to_column(var = "Sample_ID") %>%
+    dplyr::distinct(Sample_ID, .keep_all = TRUE) %>%
+    dplyr::select(Sample_ID,
+                  Age_raw = characteristics_ch1.3,  Sex_raw = characteristics_ch1.2,
+                  Chemo_adj_raw = characteristics_ch1.9, TNM_stage_raw = characteristics_ch1.4,
+                  MMR_raw = characteristics_ch1.15,
+                  RFS_event_raw = characteristics_ch1.11, RFS_delay_raw = characteristics_ch1.12,
+                  OS_event_raw = characteristics_ch1.13,  OS_delay_raw = characteristics_ch1.14,
+                  TP53_raw = characteristics_ch1.18, KRAS_raw = characteristics_ch1.22, BRAF_raw = characteristics_ch1.26) %>%
+    dplyr::mutate(
+      Age       = parse_numeric_field(Age_raw, "Age"),
+      RFS_event = parse_numeric_field(RFS_event_raw, "RFS_event"),
+      RFS_delay = parse_numeric_field(RFS_delay_raw, "RFS_delay"),
+      OS_event  = parse_numeric_field(OS_event_raw, "OS_event"),
+      OS_delay  = parse_numeric_field(OS_delay_raw, "OS_delay"),
+      Sex       = stringr::str_trim(stringr::str_remove(Sex_raw, "^.*: ")),
+      Chemo_adj = stringr::str_trim(stringr::str_remove(Chemo_adj_raw, "^.*: ")),
+      TNM_stage = stringr::str_trim(stringr::str_remove(TNM_stage_raw, "^.*: ")),
+      MMR       = stringr::str_trim(stringr::str_remove(MMR_raw, "^.*: "))
+    ) %>%
+    dplyr::select(-dplyr::ends_with("_raw")) %>%
+    dplyr::left_join(scores_gse, by = "Sample_ID") %>%
+    # feed shared censoring-aware derivation (#5/#6)
+    dplyr::mutate(Recurrence_event = RFS_event, Recurrence_delay = RFS_delay) %>%
+    derive_endpoints(os_event = "OS_event", os_time = "OS_delay",
+                     rfs_event = "Recurrence_event", rfs_time = "Recurrence_delay")
+
+  write.csv(csv_safe(clinical), file.path(out_root, module, "GSE39582_clinical.csv"), row.names = FALSE)
+
+  gse_violin_cohorts <- list(
+    "GSE_All_Patients"          = clinical,
+    "GSE_Treated"               = clinical %>% dplyr::filter(Chemo_adj == "Y"),
+    "GSE_Stage3_4_Treated"      = clinical %>% dplyr::filter(TNM_stage %in% c(3, 4), Chemo_adj == "Y"),
+    "GSE_Stage3_Treated"        = clinical %>% dplyr::filter(TNM_stage %in% c(3),    Chemo_adj == "Y"),
+    "GSE_Stage3_4_Treated_MSS"  = clinical %>% dplyr::filter(TNM_stage %in% c(3, 4), Chemo_adj == "Y", MMR == "pMMR")
+  )
+  gse_km_cohorts <- list(
+    "GSE_All_Treated"           = clinical %>% dplyr::filter(Chemo_adj == "Y"),
+    "GSE_All_MSS"               = clinical %>% dplyr::filter(MMR == "pMMR"),
+    "GSE_Stage2_Untreated_MSS"  = clinical %>% dplyr::filter(MMR == "pMMR", TNM_stage == 2, Chemo_adj == "N"),
+    "GSE_Stage3_Treated_MSS"    = clinical %>% dplyr::filter(MMR == "pMMR", TNM_stage == 3, Chemo_adj == "Y"),
+    "GSE_Stage34_Treated_MSS"   = clinical %>% dplyr::filter(MMR == "pMMR", TNM_stage %in% c(3, 4), Chemo_adj == "Y")
+  )
+  gse_cohorts <- c(gse_violin_cohorts, gse_km_cohorts)
+  all_stats[["gse"]] <- run_survival_block(gse_cohorts, "GSE39582", score_cols)
+
+  # ------------------------------------------------------------------------
+  # PART B — TCGA-COAD (STAR TPM, primary-only)
+  # ------------------------------------------------------------------------
+  message("\n--- TCGA-COAD ---")
+  query <- TCGAbiolinks::GDCquery(project = "TCGA-COAD",
+                                  data.category = "Transcriptome Profiling",
+                                  data.type     = "Gene Expression Quantification",
+                                  workflow.type = "STAR - Counts",
+                                  sample.type   = "Primary Tumor")
+  # Two-level cache: SE (large) -> TPM matrix + colData (small).
+  # colData is cached separately because MSI status is read from it downstream.
+  mat_tcga <- cache_rds("TCGA_COAD_tpm", function() {
+    se <- cache_rds("TCGA_COAD_se", function() {
+      TCGAbiolinks::GDCdownload(query); TCGAbiolinks::GDCprepare(query)
+    })
+    m  <- prep_tcga_tpm(se)
+    cd <- as.data.frame(SummarizedExperiment::colData(se))
+    saveRDS(cd, file.path(CACHE_DIR, "TCGA_COAD_coldata.rds"))
+    rm(se); gc()
+    m
+  })
+  coad_coldata <- cache_rds("TCGA_COAD_coldata", function() {
+    stop("colData cache missing — delete TCGA_COAD_tpm.rds and rerun to rebuild.")
+  })
+
+  scores_tcga <- run_ssgsea(mat_tcga, gs) %>%
+    add_composite() %>%
+    tibble::rownames_to_column("Full_Barcode") %>%
+    dplyr::arrange(Full_Barcode) %>%             # deterministic vial selection
+    dplyr::mutate(ID = tcga_patient_id(Full_Barcode)) %>%
+    dplyr::distinct(ID, .keep_all = TRUE) %>%
+    dplyr::select(-Full_Barcode)
+
+  cdr <- load_tcga_cdr() %>% dplyr::filter(Project_ID == "TCGA-COAD")
+
+  # Treatment status is CRC-specific (pan-cancer doesn't use it).
+  has_value <- function(col, val) vapply(col, function(x) val %in% x, logical(1))
+  treat <- TCGAbiolinks::GDCquery_clinic(project = "TCGA-COAD", type = "clinical") %>%
+    dplyr::mutate(
+      ID = trimws(toupper(gsub("\\.", "-", submitter_id))),
+      Treatment_Status = dplyr::case_when(
+        has_value(treatments_pharmaceutical_treatment_or_therapy, "yes") |
+          has_value(treatments_radiation_treatment_or_therapy, "yes") ~ "Treated",
+        has_value(treatments_pharmaceutical_treatment_or_therapy, "no") &
+          has_value(treatments_radiation_treatment_or_therapy, "no")  ~ "Not Treated",
+        TRUE ~ "Unknown/Not Reported")) %>%
+    dplyr::select(ID, Treatment_Status) %>% dplyr::distinct(ID, .keep_all = TRUE)
+
+  msi <- coad_coldata %>%
+    dplyr::mutate(ID = substr(barcode, 1, 12)) %>%
+    dplyr::arrange(barcode) %>% dplyr::distinct(ID, .keep_all = TRUE) %>%
+    dplyr::select(ID, dplyr::any_of("paper_MSI_status"))
+
+  clinical_tcga <- scores_tcga %>%
+    dplyr::inner_join(cdr %>% dplyr::select(ID = Patient_ID, Stage, OS_event, OS_months, DFS_event, DFS_months),
+                      by = "ID") %>%
+    dplyr::left_join(treat, by = "ID") %>%
+    dplyr::left_join(msi,   by = "ID") %>%
+    dplyr::mutate(OS_delay = OS_months, Recurrence_event = DFS_event, Recurrence_delay = DFS_months) %>%
+    derive_endpoints(os_event = "OS_event", os_time = "OS_delay",
+                     rfs_event = "Recurrence_event", rfs_time = "Recurrence_delay")
+
+  write.csv(csv_safe(clinical_tcga), file.path(out_root, module, "TCGA_COAD_clinical.csv"), row.names = FALSE)
+
+  has_msi <- "paper_MSI_status" %in% colnames(clinical_tcga)
+  tcga_cohorts <- list(
+    "TCGA_All_Patients"     = clinical_tcga,
+    "TCGA_Untreated"        = clinical_tcga %>% dplyr::filter(Treatment_Status == "Not Treated"),
+    "TCGA_Treated"          = clinical_tcga %>% dplyr::filter(Treatment_Status == "Treated"),
+    "TCGA_Stage1_Untreated" = clinical_tcga %>% dplyr::filter(Stage == "I",  Treatment_Status == "Not Treated"),
+    "TCGA_Stage2_Untreated" = clinical_tcga %>% dplyr::filter(Stage == "II", Treatment_Status == "Not Treated")
+  )
+  if (has_msi) {
+    tcga_cohorts[["TCGA_All_MSS"]] <- clinical_tcga %>% dplyr::filter(paper_MSI_status == "MSS")
+    tcga_cohorts[["TCGA_All_MSI"]] <- clinical_tcga %>% dplyr::filter(paper_MSI_status %in% c("MSI-H", "MSI-L"))
+  }
+  all_stats[["tcga"]] <- run_survival_block(tcga_cohorts, "TCGA-COAD", score_cols)
+
+  # ------------------------------------------------------------------------
+  # FDR (PROVISIONAL, #10) + plots + forest
+  # ------------------------------------------------------------------------
+  stats_df <- apply_fdr(do.call(rbind, all_stats),
+                        by = c("Dataset", "Project", "Test", "Metric"))   # replicates Final.R
+  write.csv(stats_df, file.path(out_root, module, "CRC_Statistical_Summary.csv"), row.names = FALSE)
+
+  plot_survival_block(gse_cohorts,  "GSE39582",  score_cols, stats_df, out_root, module)
+  plot_survival_block(tcga_cohorts, "TCGA-COAD", score_cols, stats_df, out_root, module)
+  for (ds in c("GSE39582", "TCGA-COAD"))
+    for (sc in score_cols)
+      for (m in c("OS", "RFS"))
+        generate_forest(stats_df, ds, m, sc, out_root, module)
+
+  message("CRC survival module complete.")
+  invisible(stats_df)
+}
