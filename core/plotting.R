@@ -104,7 +104,8 @@ generate_km <- function(df, score_col, metric, title, filename, si, out_root, mo
                                  risk.table.col = "strata", ggtheme = pub_theme, title = ft,
                                  xlab = sprintf("Time (months, truncated at %d)", OS_CUTPOINT),
                                  legend.labs = c("Low Score", "High Score"),
-                                 palette = unname(c(pub_palette["Low"], pub_palette["High"])))
+                                 palette = unname(c(pub_palette["Low"], pub_palette["High"])),
+                                 censor = nrow(d) < 500)
     grDevices::png(out_path, width = 2000, height = 1800, res = 300)
     tryCatch(print(pl), error = function(e) message("  [KM print] ", e$message),
              finally = if (grDevices::dev.cur() > 1) grDevices::dev.off())
