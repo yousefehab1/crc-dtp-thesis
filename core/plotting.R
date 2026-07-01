@@ -84,6 +84,54 @@ generate_violin <- function(df, score_col, group_col, title, filename, si, out_r
   ggplot2::ggsave(out_path, p, width = 7, height = 6, dpi = 300, bg = "white")
 }
 
+# --- Score-across-subtype violin (Kruskal-Wallis; 2-4 groups) -----------------
+# Distribution of one continuous score across molecular subtypes (CMS / PDS).
+# `si` carries: testable, sig, fdr_p, eps2 (from get_kruskal_stats + apply_fdr).
+generate_subtype_violin <- function(df, score_col, subtype_col, title, filename,
+                                    si, out_root, module) {
+  d <- df %>% dplyr::filter(!is.na(.data[[subtype_col]]) & .data[[subtype_col]] != "" &
+                            !is.na(.data[[score_col]]))
+  if (!is.numeric(d[[score_col]])) return(invisible(NULL))
+  tb <- table(droplevels(factor(d[[subtype_col]])))
+  if (length(tb) < 2) return(invisible(NULL))
+
+  out_path <- file.path(route_folder(out_root, module, "subtype_violin", si),
+                        paste0(filename, ".png"))
+
+  # Balanced subsample for visualisation (statistics use the full data).
+  n_bal <- min(tb)
+  set.seed(42)
+  d_plot <- d %>%
+    dplyr::group_by(.data[[subtype_col]]) %>%
+    dplyr::slice_sample(n = n_bal) %>%
+    dplyr::ungroup()
+
+  sm   <- d_plot %>% dplyr::group_by(.data[[subtype_col]]) %>%
+    dplyr::summarise(n = dplyr::n(), .groups = "drop")
+  lbls <- setNames(paste0(sm[[subtype_col]], "\n(n=", sm$n, ")"), sm[[subtype_col]])
+  ann  <- paste(Filter(nchar, c(
+    if (!is.na(si$fdr_p)) sprintf("KW FDR p = %.3g", si$fdr_p) else "KW FDR p = N/A",
+    if (!is.na(si$eps2)) sprintf("eps2 = %.3f", si$eps2) else "")),
+    collapse = "  |  ")
+
+  sig_subtitle <- if (!si$testable) "Not testable (insufficient data)"
+                  else if (si$sig) "FDR Significant (p < 0.05)" else "Not FDR Significant"
+
+  p <- ggplot2::ggplot(d_plot, ggplot2::aes(x = .data[[subtype_col]], y = .data[[score_col]],
+                                            fill = .data[[subtype_col]])) +
+    ggplot2::geom_violin(alpha = 0.8, trim = FALSE) +
+    ggplot2::geom_boxplot(width = 0.15, fill = "white", alpha = 0.9, outlier.shape = NA) +
+    ggplot2::scale_fill_brewer(palette = "Set2") +
+    ggplot2::scale_x_discrete(labels = lbls) +
+    ggplot2::annotate("text", x = 1.5, y = Inf, vjust = 2, label = ann,
+                      size = 4, fontface = "italic", colour = "grey30") +
+    ggplot2::labs(title = title,
+                  subtitle = paste0(sig_subtitle, "  |  Balanced subsample (n=", n_bal, " per group)"),
+                  x = subtype_col, y = paste0("ssGSEA: ", sub(SCORE_SUFFIX, "", score_col))) +
+    pub_theme + ggplot2::theme(legend.position = "none")
+  ggplot2::ggsave(out_path, p, width = 7, height = 6, dpi = 300, bg = "white")
+}
+
 # --- Kaplan-Meier (median split for visualisation only; #7) -------------------
 generate_km <- function(df, score_col, metric, title, filename, si, out_root, module) {
   mc <- metric_cols(metric); t_col <- mc[["t"]]; e_col <- mc[["e"]]

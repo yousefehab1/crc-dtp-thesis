@@ -43,6 +43,7 @@ source("core/scoring.R")
 source("core/clinical.R")
 source("core/stats.R")
 source("core/plotting.R")
+source("core/subtyping.R")       # depends on expression.R, scoring.R, io.R
 source("core/gsea_plots.R")      # depends on pub_theme (plotting.R)
 
 # ---- Source modules ---------------------------------------------------------

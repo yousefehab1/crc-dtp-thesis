@@ -23,6 +23,25 @@ get_wilcox_stats <- function(df, score_col, group_col) {
   list(p = wt$p.value, r = r, n = length(g1) + length(g2))
 }
 
+# --- Kruskal-Wallis + epsilon-squared effect for score-across-subtype (>=2 --
+# groups). Gate: MIN_GROUP_N per retained level. Used to compare a continuous
+# score across molecular subtypes (CMS1-4, PDS1-3), unlike the 2-group Wilcoxon.
+get_kruskal_stats <- function(df, score_col, group_col) {
+  d <- df %>% dplyr::filter(!is.na(.data[[group_col]]) & .data[[group_col]] != "" &
+                            !is.na(.data[[score_col]]))
+  if (!is.numeric(d[[score_col]])) return(list(p = NA, eps2 = NA, n = NA, k = NA))
+  tbl  <- table(droplevels(factor(d[[group_col]])))
+  keep <- names(tbl)[tbl >= MIN_GROUP_N]
+  d    <- d[d[[group_col]] %in% keep, , drop = FALSE]
+  if (length(keep) < 2) return(list(p = NA, eps2 = NA, n = nrow(d), k = length(keep)))
+  kt <- tryCatch(kruskal.test(d[[score_col]], factor(d[[group_col]])),
+                 error = function(e) NULL)
+  if (is.null(kt)) return(list(p = NA, eps2 = NA, n = nrow(d), k = length(keep)))
+  n    <- nrow(d)
+  eps2 <- as.numeric(kt$statistic) / ((n^2 - 1) / (n + 1))   # epsilon-squared
+  list(p = kt$p.value, eps2 = eps2, n = n, k = length(keep))
+}
+
 # --- Log-rank p on median-split KM. Gate: MIN_KM_GROUP_N + MIN_EVENTS (#9). ---
 get_km_pval <- function(df, score_col, t_col, e_col) {
   d <- df[!is.na(df[[t_col]]) & !is.na(df[[e_col]]) & !is.na(df[[score_col]]), ]

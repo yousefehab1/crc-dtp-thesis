@@ -87,6 +87,16 @@ run_crc_survival <- function(out_root, panel, crc_signatures = NULL) {
     derive_endpoints(os_event = "OS_event", os_time = "OS_delay",
                      rfs_event = "Recurrence_event", rfs_time = "Recurrence_delay")
 
+  # --- Molecular subtyping (CMS + PDS), symbol-keyed, on the same matrix ------
+  emat_gse_sym <- build_symbol_matrix(Biobase::exprs(eset), "microarray")
+  cms_gse <- cache_rds("cms_gse", function() call_cms(emat_gse_sym))
+  pds_gse <- cache_rds("pds_gse", function() call_pds(emat_gse_sym))
+  clinical <- clinical %>%
+    attach_subtypes(cms_gse, clinical_key = "Sample_ID") %>%
+    attach_subtypes(pds_gse, clinical_key = "Sample_ID")
+  write.csv(csv_safe(dplyr::select(clinical, Sample_ID, dplyr::any_of(c("CMS", "PDS")))),
+            file.path(out_root, module, "GSE39582_subtypes.csv"), row.names = FALSE)
+
   write.csv(csv_safe(clinical), file.path(out_root, module, "GSE39582_clinical.csv"), row.names = FALSE)
 
   gse_violin_cohorts <- list(
@@ -103,7 +113,9 @@ run_crc_survival <- function(out_root, panel, crc_signatures = NULL) {
     "GSE_Stage3_Treated_MSS"    = clinical %>% dplyr::filter(MMR == "pMMR", TNM_stage == 3, Chemo_adj == "Y"),
     "GSE_Stage34_Treated_MSS"   = clinical %>% dplyr::filter(MMR == "pMMR", TNM_stage %in% c(3, 4), Chemo_adj == "Y")
   )
-  gse_cohorts <- c(gse_violin_cohorts, gse_km_cohorts)
+  gse_cohorts <- c(gse_violin_cohorts, gse_km_cohorts,
+                   subtype_cohorts(clinical, "CMS", "GSE"),
+                   subtype_cohorts(clinical, "PDS", "GSE"))
   all_stats[["gse"]] <- run_survival_block(gse_cohorts, "GSE39582", score_cols)
 
   # ------------------------------------------------------------------------
@@ -168,6 +180,19 @@ run_crc_survival <- function(out_root, panel, crc_signatures = NULL) {
     derive_endpoints(os_event = "OS_event", os_time = "OS_delay",
                      rfs_event = "Recurrence_event", rfs_time = "Recurrence_delay")
 
+  # --- Molecular subtyping (CMS + PDS), symbol-keyed, on the same SE ----------
+  se_coad <- cache_rds("TCGA_COAD_se", function()
+    stop("SE cache missing — delete TCGA_COAD_tpm.rds and rerun to rebuild."))
+  emat_tcga_sym <- build_symbol_matrix(se_coad, "tcga")
+  rm(se_coad); gc()
+  cms_tcga <- cache_rds("cms_tcga", function() call_cms(emat_tcga_sym))
+  pds_tcga <- cache_rds("pds_tcga", function() call_pds(emat_tcga_sym))
+  clinical_tcga <- clinical_tcga %>%
+    attach_subtypes(cms_tcga, clinical_key = "ID", key_fun = tcga_patient_id) %>%
+    attach_subtypes(pds_tcga, clinical_key = "ID", key_fun = tcga_patient_id)
+  write.csv(csv_safe(dplyr::select(clinical_tcga, ID, dplyr::any_of(c("CMS", "PDS")))),
+            file.path(out_root, module, "TCGA_COAD_subtypes.csv"), row.names = FALSE)
+
   write.csv(csv_safe(clinical_tcga), file.path(out_root, module, "TCGA_COAD_clinical.csv"), row.names = FALSE)
 
   has_msi <- "paper_MSI_status" %in% colnames(clinical_tcga)
@@ -182,6 +207,9 @@ run_crc_survival <- function(out_root, panel, crc_signatures = NULL) {
     tcga_cohorts[["TCGA_All_MSS"]] <- clinical_tcga %>% dplyr::filter(paper_MSI_status == "MSS")
     tcga_cohorts[["TCGA_All_MSI"]] <- clinical_tcga %>% dplyr::filter(paper_MSI_status %in% c("MSI-H", "MSI-L"))
   }
+  tcga_cohorts <- c(tcga_cohorts,
+                    subtype_cohorts(clinical_tcga, "CMS", "TCGA"),
+                    subtype_cohorts(clinical_tcga, "PDS", "TCGA"))
   all_stats[["tcga"]] <- run_survival_block(tcga_cohorts, "TCGA-COAD", score_cols)
 
   # ------------------------------------------------------------------------
@@ -197,6 +225,43 @@ run_crc_survival <- function(out_root, panel, crc_signatures = NULL) {
     for (sc in score_cols)
       for (m in c("OS", "RFS"))
         generate_forest(stats_df, ds, m, sc, out_root, module)
+
+  # ------------------------------------------------------------------------
+  # Score-across-subtype characterisation (Kruskal-Wallis, DTP score by CMS/PDS)
+  # ------------------------------------------------------------------------
+  subtype_data <- list("GSE39582" = clinical, "TCGA-COAD" = clinical_tcga)
+  sub_rows <- list()
+  for (ds in names(subtype_data)) {
+    cd <- subtype_data[[ds]]
+    for (ax in c("CMS", "PDS")) {
+      if (!ax %in% colnames(cd)) next
+      for (sc in score_cols) {
+        ks <- get_kruskal_stats(cd, sc, ax)
+        sub_rows[[length(sub_rows) + 1]] <- data.frame(
+          Dataset = ds, Subtype_Axis = ax, Score = sc,
+          Raw_P = ks$p, Eps2 = ks$eps2, N = ks$n, K = ks$k,
+          Is_Testable = !is.na(ks$p), stringsAsFactors = FALSE)
+      }
+    }
+  }
+  subtype_stats <- do.call(rbind, sub_rows)
+  if (!is.null(subtype_stats)) {
+    subtype_stats <- subtype_stats %>%
+      dplyr::group_by(Dataset, Subtype_Axis) %>%
+      dplyr::mutate(FDR_P = p.adjust(Raw_P, method = "BH")) %>%
+      dplyr::ungroup() %>%
+      dplyr::mutate(Is_Significant = !is.na(FDR_P) & FDR_P < 0.05)
+    write.csv(subtype_stats, file.path(out_root, module, "Subtype_Score_Stats.csv"), row.names = FALSE)
+    for (i in seq_len(nrow(subtype_stats))) {
+      r  <- subtype_stats[i, ]
+      sc_lbl <- sub(SCORE_SUFFIX, "", r$Score)
+      si <- list(testable = r$Is_Testable, sig = r$Is_Significant, fdr_p = r$FDR_P, eps2 = r$Eps2)
+      generate_subtype_violin(subtype_data[[r$Dataset]], r$Score, r$Subtype_Axis,
+        title    = sprintf("%s  %s by %s", r$Dataset, sc_lbl, r$Subtype_Axis),
+        filename = sprintf("%s_%s_by_%s", r$Dataset, sc_lbl, r$Subtype_Axis),
+        si = si, out_root = out_root, module = module)
+    }
+  }
 
   message("CRC survival module complete.")
   invisible(stats_df)

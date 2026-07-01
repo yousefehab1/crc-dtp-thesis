@@ -12,10 +12,10 @@
 # Target ID type is governed by ID_TYPE (config.R). When ID_TYPE == "ensembl"
 # the function maps probes directly to ENSEMBL IDs; when "symbol" it behaves
 # identically to the original implementation.
-prep_microarray_symbols <- function(exp_matrix, anno_db = NULL) {
+prep_microarray_symbols <- function(exp_matrix, anno_db = NULL, id_type = ID_TYPE) {
   if (is.null(anno_db)) anno_db <- hgu133plus2.db::hgu133plus2.db
-  target_col <- if (ID_TYPE == "ensembl") "ENSEMBL" else "SYMBOL"
-  id_label   <- if (ID_TYPE == "ensembl") "ensembl" else "symbol"
+  target_col <- if (id_type == "ensembl") "ENSEMBL" else "SYMBOL"
+  id_label   <- if (id_type == "ensembl") "ensembl" else "symbol"
 
   probe_ids <- AnnotationDbi::mapIds(anno_db, keys = rownames(exp_matrix),
                                      column = target_col, keytype = "PROBEID",
@@ -33,7 +33,7 @@ prep_microarray_symbols <- function(exp_matrix, anno_db = NULL) {
   message(sprintf("  probe->%s: %d/%d (%.1f%%) unmapped, dropped.",
                   id_label, n_unmapped, nrow(mat), 100 * n_unmapped / nrow(mat)))
   mat <- mat[!is.na(rownames(mat)), , drop = FALSE]
-  if (ID_TYPE == "ensembl")
+  if (id_type == "ensembl")
     rownames(mat) <- strip_ensembl_version(rownames(mat))
   message(sprintf("  collapsing duplicates: %d probes -> %d %ss.",
                   nrow(mat), length(unique(rownames(mat))), id_label))
@@ -44,7 +44,7 @@ prep_microarray_symbols <- function(exp_matrix, anno_db = NULL) {
 #     primary-only filter (#2a, #3-TCGA, #17). Used identically by both arms.
 # Row names follow ID_TYPE: gene_name (symbols) or gene_id (Ensembl, version
 # suffix stripped) from rowData.
-prep_tcga_tpm <- function(se, tumour_codes = TUMOUR_CODES) {
+prep_tcga_tpm <- function(se, tumour_codes = TUMOUR_CODES, id_type = ID_TYPE) {
   if (!"tpm_unstrand" %in% SummarizedExperiment::assayNames(se))
     stop("Assay 'tpm_unstrand' not found. Available: ",
          paste(SummarizedExperiment::assayNames(se), collapse = ", "))
@@ -52,9 +52,9 @@ prep_tcga_tpm <- function(se, tumour_codes = TUMOUR_CODES) {
   rd  <- SummarizedExperiment::rowData(se)
   mat <- SummarizedExperiment::assay(se, "tpm_unstrand")
 
-  if (ID_TYPE == "ensembl") {
+  if (id_type == "ensembl") {
     if (!"gene_id" %in% colnames(rd))
-      stop("rowData has no 'gene_id' column; cannot use ID_TYPE='ensembl' for TCGA.")
+      stop("rowData has no 'gene_id' column; cannot use id_type='ensembl' for TCGA.")
     rownames(mat) <- strip_ensembl_version(rd$gene_id)
   } else {
     rownames(mat) <- rd$gene_name
