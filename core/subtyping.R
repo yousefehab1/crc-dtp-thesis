@@ -39,12 +39,16 @@ call_cms <- function(emat_symbol_log2) {
 }
 
 # --- PDS via PDSclassifier (guarded: GitHub-only dependency) ------------------
+# threshold = 0.6 is the PDSpredict (v1.0.1) package default: a sample is assigned to
+# PDS1/2/3 only when that subtype's SVM posterior probability exceeds 0.6, else "Mixed".
+# We keep the classifier authors' default rather than tuning it (yields ~21% Mixed in both
+# CRC cohorts). Pinned install: sidmall/PDSclassifier@c89a19c891185f7806848a990571423d6a32d2a8.
 # Returns NULL (with a single skip message) if the package is unavailable, so
 # the caller degrades to CMS + survival gracefully.
 call_pds <- function(emat_symbol_log2, species = "human", threshold = 0.6) {
   if (!requireNamespace("PDSclassifier", quietly = TRUE)) {
     message("  PDS: PDSclassifier not installed; skipping ",
-            "(remotes::install_github('MolecularPathologyLab/PDSclassifier')).")
+            "(remotes::install_github('sidmall/PDSclassifier@c89a19c')).")
     return(NULL)
   }
   # PDSpredict expects a data.frame whose first column is the gene symbol and

@@ -11,8 +11,9 @@
 #   root <- init_run("subtyping")
 #   run_crc_subtyping(root)
 #
-# PDS requires the GitHub-only PDSclassifier package:
-#   remotes::install_github("MolecularPathologyLab/PDSclassifier")
+# PDS requires the GitHub-only PDSclassifier package. Pinned to the exact commit that
+# produced the reported PDS calls (v1.0.1) for reproducibility:
+#   remotes::install_github("sidmall/PDSclassifier@c89a19c891185f7806848a990571423d6a32d2a8")
 # If absent, PDS is skipped and CMS still runs.
 #
 # NOTE: confirm PDSpredict input orientation against data(testData) in the

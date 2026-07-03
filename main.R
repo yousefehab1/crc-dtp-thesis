@@ -45,6 +45,7 @@ source("core/stats.R")
 source("core/plotting.R")
 source("core/subtyping.R")       # depends on expression.R, scoring.R, io.R
 source("core/gsea_plots.R")      # depends on pub_theme (plotting.R)
+source("core/composite_figures.R")  # publication composites; called by crc_survival
 
 # ---- Source modules ---------------------------------------------------------
 source("modules/crc_survival.R")

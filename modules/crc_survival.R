@@ -263,6 +263,88 @@ run_crc_survival <- function(out_root, panel, crc_signatures = NULL) {
     }
   }
 
+  # ------------------------------------------------------------------------
+  # Confounding + effect-modification of the DTP signature (CRC only)
+  # Does CMS / PDS / Stage / MSI explain away (confound) or modify the score's
+  # OS/RFS association? Adjusted Cox + interaction Cox on the core DTP scores.
+  # ------------------------------------------------------------------------
+  cox_data    <- list("GSE39582" = harmonize_crc_modifiers(clinical, "GSE39582"),
+                      "TCGA-COAD" = harmonize_crc_modifiers(clinical_tcga, "TCGA-COAD"))
+  core_scores <- intersect(CORE_DTP_SCORES, score_cols)
+  adj_specs   <- list(Clinicopath = c("Stage_bin", "MSI_group"),
+                      CMS_adjusted = "CMS", PDS_adjusted = "PDS")
+
+  adj_rows <- list(); int_rows <- list(); level_rows <- list()
+  for (ds in names(cox_data)) {
+    cd <- cox_data[[ds]]
+    for (metric in c("OS", "RFS")) {
+      mc <- metric_cols(metric); tcol <- mc[["t"]]; ecol <- mc[["e"]]
+      for (sc in core_scores) {
+        for (mlab in names(adj_specs)) {
+          covs <- intersect(adj_specs[[mlab]], colnames(cd))
+          a <- if (length(covs) == 0) NULL else get_cox_adjusted(cd, sc, tcol, ecol, covs)
+          adj_rows[[length(adj_rows) + 1]] <- data.frame(
+            Dataset = ds, Metric = metric, Score = sc, Model = mlab,
+            HR = if (is.null(a)) NA else a$HR,
+            HR_lower = if (is.null(a)) NA else a$HR_lower, HR_upper = if (is.null(a)) NA else a$HR_upper,
+            Raw_P = if (is.null(a)) NA else a$P, C_index = if (is.null(a)) NA else a$C_index,
+            LRT_score_P = if (is.null(a)) NA else a$LRT_P, PH_P = if (is.null(a)) NA else a$PH_P,
+            Unadj_HR = if (is.null(a)) NA else a$Unadj_HR,
+            Delta_logHR = if (is.null(a)) NA else a$Delta_logHR,
+            Delta_logHR_pct = if (is.null(a)) NA else a$Delta_logHR_pct,
+            N = if (is.null(a)) NA else a$N, N_events = if (is.null(a)) NA else a$N_events,
+            Is_Testable = !is.null(a), stringsAsFactors = FALSE)
+        }
+        for (modf in intersect(CRC_MODIFIERS, colnames(cd))) {
+          it <- get_cox_interaction(cd, sc, tcol, ecol, modf)
+          int_rows[[length(int_rows) + 1]] <- data.frame(
+            Dataset = ds, Metric = metric, Score = sc, Modifier = modf,
+            Raw_P = if (is.null(it)) NA else it$Interaction_P, K = if (is.null(it)) NA else it$K,
+            N = if (is.null(it)) NA else it$N, N_events = if (is.null(it)) NA else it$N_events,
+            Is_Testable = !is.null(it), stringsAsFactors = FALSE)
+          if (!is.null(it) && !is.null(it$per_level)) {
+            pl <- it$per_level
+            pl$Dataset <- ds; pl$Metric <- metric; pl$Score <- sc; pl$Modifier <- modf
+            level_rows[[length(level_rows) + 1]] <- pl
+          }
+        }
+      }
+    }
+  }
+
+  adj_df <- apply_fdr(do.call(rbind, adj_rows), by = c("Dataset", "Metric", "Model"))
+  write.csv(adj_df, file.path(out_root, module, "Adjusted_Cox_Summary.csv"), row.names = FALSE)
+  int_df <- apply_fdr(do.call(rbind, int_rows), by = c("Dataset", "Metric", "Modifier"))
+  write.csv(int_df, file.path(out_root, module, "Interaction_Cox_Summary.csv"), row.names = FALSE)
+
+  level_df <- if (length(level_rows)) do.call(rbind, level_rows) else NULL
+  if (!is.null(level_df)) {
+    write.csv(level_df, file.path(out_root, module, "Subgroup_Score_HRs.csv"), row.names = FALSE)
+    for (i in seq_len(nrow(int_df))) {
+      r  <- int_df[i, ]
+      hr <- level_df[level_df$Dataset == r$Dataset & level_df$Metric == r$Metric &
+                     level_df$Score == r$Score & level_df$Modifier == r$Modifier, , drop = FALSE]
+      if (nrow(hr) > 0)
+        generate_subgroup_forest(hr, r$Dataset, r$Metric, r$Score, r$Modifier,
+                                 r$FDR_P, out_root, module)
+    }
+  }
+
+  # ---- Publication composite figures (groups 1-3) from this run's CSVs -------
+  # Built from the tabular outputs just written by core/composite_figures.R
+  # (sourced in main.R); guarded so a figure error never fails the analysis, but
+  # any failure is warned so it surfaces in the end-of-run summary.
+  if (exists("build_crc_composites")) {
+    tryCatch(build_crc_composites(file.path(out_root, module)),
+             error = function(e) {
+               msg <- paste0("[composite figures] builder aborted: ", conditionMessage(e))
+               message("  ", msg); warning(msg, call. = FALSE)
+             })
+  } else {
+    warning("[composite figures] build_crc_composites() not found — is core/composite_figures.R sourced in main.R?",
+            call. = FALSE)
+  }
+
   message("CRC survival module complete.")
   invisible(stats_df)
 }

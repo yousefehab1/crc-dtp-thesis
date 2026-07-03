@@ -70,6 +70,136 @@ get_cox_stats <- function(df, score_col, t_col, e_col) {
   }, error = function(e) NULL)
 }
 
+# ------------------------------------------------------------------------------
+# Confounder + effect-modification Cox (CRC only). All models use the 3-year
+# landmarked endpoints and the CONTINUOUS score, consistent with get_cox_stats().
+# ------------------------------------------------------------------------------
+
+# Harmonise the four modifiers into clean, unified factor columns so one code
+# path serves both cohorts. cohort is "GSE39582" or "TCGA-COAD".
+harmonize_crc_modifiers <- function(df, cohort) {
+  stage_raw <- if (cohort == "GSE39582") suppressWarnings(as.numeric(df$TNM_stage))
+               else df$Stage
+  df$Stage_bin <- if (cohort == "GSE39582")
+    factor(dplyr::case_when(stage_raw %in% 0:2 ~ "Early",
+                            stage_raw %in% 3:4 ~ "Late", TRUE ~ NA_character_),
+           levels = c("Early", "Late"))
+  else
+    factor(dplyr::case_when(df$Stage %in% c("I", "II")   ~ "Early",
+                            df$Stage %in% c("III", "IV")  ~ "Late", TRUE ~ NA_character_),
+           levels = c("Early", "Late"))
+
+  msi_raw <- if (cohort == "GSE39582") df$MMR else df[["paper_MSI_status"]]
+  # MSI-L is grouped with MSS, not MSI: MSI-L lacks the hypermutator/immune phenotype that
+  # defines the distinct MSI-high (dMMR) entity and behaves like MSS (Rantanen 2023 pooled
+  # MSS/MSI-low vs MSI-high). This also makes GSE (dMMR/pMMR only) and TCGA consistent.
+  df$MSI_group <- factor(dplyr::case_when(
+    msi_raw %in% c("pMMR", "MSS", "MSI-L") ~ "MSS",
+    msi_raw %in% c("dMMR", "MSI-H")        ~ "MSI",
+    TRUE                                   ~ NA_character_), levels = c("MSS", "MSI"))
+
+  if ("CMS" %in% colnames(df)) {
+    cms <- df$CMS; cms[!cms %in% paste0("CMS", 1:4)] <- NA
+    df$CMS <- stats::relevel(factor(cms), ref = "CMS2")   # canonical majority ref
+  }
+  if ("PDS" %in% colnames(df)) {
+    pds <- df$PDS; pds[!pds %in% paste0("PDS", 1:3)] <- NA   # drop "Mixed" + NA
+    df$PDS <- droplevels(factor(pds))
+    if (nlevels(df$PDS) > 0) {
+      ref <- names(which.max(table(df$PDS)))
+      df$PDS <- stats::relevel(df$PDS, ref = ref)
+    }
+  }
+  df
+}
+
+# Second-row p-value from an anova.coxph LRT table, robust to the p-column name.
+.anova_lrt_p <- function(reduced, full) {
+  av   <- stats::anova(reduced, full)
+  pcol <- grep("Chi", colnames(av), value = TRUE)
+  if (length(pcol) == 0) return(NA_real_)
+  av[[tail(pcol, 1)]][2]
+}
+
+# Events-per-variable gate: TRUE when the model is admissible.
+.cox_epv_ok <- function(n, n_events, n_params)
+  n >= MIN_COX_N && n_events >= MIN_EVENTS && n_events >= MIN_EPV * n_params
+
+# Drop rows missing any modelled column, then drop unused factor levels.
+.cox_complete <- function(df, cols) {
+  d <- df[stats::complete.cases(df[, cols, drop = FALSE]), , drop = FALSE]
+  droplevels(d)
+}
+
+# Adjusted Cox: score term after adjusting for `covars` (character vector).
+# Returns the SCORE-term HR/CI/p plus a model LRT (does score add signal beyond
+# covars) and a PH check (cox.zph for the score term). NULL if inadmissible.
+get_cox_adjusted <- function(df, score_col, t_col, e_col, covars) {
+  cols <- c(score_col, t_col, e_col, covars)
+  d <- .cox_complete(df, cols)
+  covars <- covars[vapply(covars, function(c) length(unique(d[[c]])) > 1, logical(1))]
+  n_params <- length(covars) + 1L +
+    sum(vapply(covars, function(c) if (is.factor(d[[c]])) nlevels(d[[c]]) - 2L else 0L, integer(1)))
+  n_ev <- sum(d[[e_col]])
+  if (!.cox_epv_ok(nrow(d), n_ev, n_params)) return(NULL)
+  rhs  <- paste(c(score_col, covars), collapse = " + ")
+  base <- paste(covars, collapse = " + ")
+  tryCatch({
+    full <- survival::coxph(as.formula(sprintf("Surv(%s,%s) ~ %s", t_col, e_col, rhs)),
+                            data = d, ties = "efron")
+    s    <- summary(full)
+    lrt  <- if (length(covars) == 0) unname(s$logtest[["pvalue"]]) else {
+      red <- survival::coxph(as.formula(sprintf("Surv(%s,%s) ~ %s", t_col, e_col, base)), data = d)
+      .anova_lrt_p(red, full)
+    }
+    ph <- tryCatch(survival::cox.zph(full)$table[score_col, "p"], error = function(e) NA_real_)
+    adj_hr <- exp(coef(full)[[score_col]])
+    # unadjusted score fit on the SAME complete-case subset -> clean Δ estimate
+    unadj  <- survival::coxph(as.formula(sprintf("Surv(%s,%s) ~ %s", t_col, e_col, score_col)), data = d)
+    unadj_hr <- exp(coef(unadj)[[1]])
+    # Change-in-estimate for confounding. Delta_logHR is the stable absolute change in the
+    # score's log-HR after adjustment; the percent version is floored so it does not explode
+    # when the unadjusted log-HR is ~0 (HR near 1) — read the absolute value in that regime.
+    delta_loghr <- log(adj_hr) - log(unadj_hr)
+    delta_pct   <- 100 * delta_loghr / max(abs(log(unadj_hr)), 0.05)
+    list(HR = adj_hr,
+         HR_lower = s$conf.int[score_col, "lower .95"],
+         HR_upper = s$conf.int[score_col, "upper .95"],
+         P = s$coefficients[score_col, "Pr(>|z|)"], C_index = unname(s$concordance["C"]),
+         LRT_P = lrt, PH_P = ph, Unadj_HR = unadj_hr,
+         Delta_logHR = delta_loghr, Delta_logHR_pct = delta_pct,
+         N = nrow(d), N_events = n_ev)
+  }, error = function(e) NULL)
+}
+
+# Interaction Cox: LRT of `score * modifier` vs `score + modifier` (effect
+# modification), plus the per-level simple score HRs. NULL if inadmissible.
+get_cox_interaction <- function(df, score_col, t_col, e_col, modifier) {
+  cols <- c(score_col, t_col, e_col, modifier)
+  d <- .cox_complete(df, cols)
+  if (!is.factor(d[[modifier]])) d[[modifier]] <- factor(d[[modifier]])
+  d <- droplevels(d)
+  k <- nlevels(d[[modifier]])
+  if (k < 2) return(NULL)
+  n_params <- 2L * k - 1L                       # score + (k-1) main + (k-1) interaction
+  n_ev <- sum(d[[e_col]])
+  if (!.cox_epv_ok(nrow(d), n_ev, n_params)) return(NULL)
+  tryCatch({
+    red  <- survival::coxph(as.formula(sprintf("Surv(%s,%s) ~ %s + %s", t_col, e_col, score_col, modifier)), data = d)
+    full <- survival::coxph(as.formula(sprintf("Surv(%s,%s) ~ %s * %s", t_col, e_col, score_col, modifier)), data = d)
+    lrt  <- .anova_lrt_p(red, full)
+    # per-level simple score HRs (univariable score within each modifier level)
+    per_level <- lapply(levels(d[[modifier]]), function(lv) {
+      cs <- get_cox_stats(d[d[[modifier]] == lv, , drop = FALSE], score_col, t_col, e_col)
+      if (is.null(cs)) return(NULL)
+      data.frame(Level = lv, HR = cs$HR, HR_lower = cs$HR_lower, HR_upper = cs$HR_upper,
+                 N = cs$N, N_events = cs$N_events, stringsAsFactors = FALSE)
+    })
+    list(Interaction_P = lrt, K = k, N = nrow(d), N_events = n_ev,
+         per_level = do.call(rbind, per_level))
+  }, error = function(e) NULL)
+}
+
 # --- One tidy stats row -------------------------------------------------------
 .stat_row <- function(dataset, proj, test, metric, score,
                       raw_p = NA, effect_r = NA, hr = NA, hr_l = NA, hr_u = NA,
