@@ -13,6 +13,10 @@
 #            Fig2A continuous-Cox HR/SD matrix + Fig2B KM curve grid (log-rank p)
 #   Group 3  build_subgroup_figures()  effect modification by CMS/PDS/Stage/MSI
 #            Fig3A interaction-FDR matrix + Fig3B per-score subgroup forests
+#   Group 4  build_subtype_survival_figures()  §3.3 univariable DTP-to-outcome
+#            WITHIN molecular/clinical subgroups: Fig3_3A per-1-SD Cox-HR tile
+#            grid (gated cells marked not-testable) + Fig3_3B score-across-subtype
+#            (Kruskal-Wallis eps^2), plus Table_3_3_subtype_survival.csv
 #
 # Statistics follow the main analysis (report §"continuous score for inference,
 # split for display"): Wilcoxon + signed rank-biserial r for outcomes; univariable
@@ -20,8 +24,8 @@
 # on the median-split KM curves; interaction-LRT FDR for effect modification.
 #
 # Reads from <RUN_DIR>:  *_clinical.csv, CRC_Statistical_Summary.csv,
-#   Subgroup_Score_HRs.csv, Interaction_Cox_Summary.csv.  Writes PDF + 300-dpi
-#   PNG to <RUN_DIR>/composites/.
+#   Subgroup_Score_HRs.csv, Interaction_Cox_Summary.csv, Subtype_Score_Stats.csv.
+#   Writes PDF + 300-dpi PNG to <RUN_DIR>/composites/.
 #
 # Use:
 #   * in the pipeline:  sourced by main.R; run_crc_survival() calls it automatically
@@ -62,10 +66,15 @@ MODULE_LEVELS <- unname(MODULES)
 # dplyr::select() with an S4 generic, which breaks tbl_df pipelines; qualifying
 # the verbs locally makes each builder immune to load-order masking.
 .dplyr_local <- function(env) {
-  for (fn in c("select","filter","mutate","summarise","group_by","arrange",
+  for (fn in c("select","filter","mutate","transmute","summarise","group_by","arrange",
                "left_join","semi_join","distinct","pull","bind_rows","rename","count"))
     assign(fn, getExportedValue("dplyr", fn), envir = env)
 }
+
+# Null/NA-coalescing helper for optional-row column access (a Wilcoxon or KM row
+# may be absent for a given cohort/score/metric).
+`%||%` <- function(a, b)
+  if (is.null(a) || length(a) == 0 || (length(a) == 1 && is.na(a))) b else a
 
 .find_run_dir <- function() {
   cand <- sort(Sys.glob(file.path("CRC_DTP_*", "crc_survival")), decreasing = TRUE)
@@ -437,8 +446,7 @@ build_subgroup_figures <- function(run_dir, out_dir, primary_score = "Up_ssGSEA"
            Modifier = factor(Modifier, MOD_LEVELS), Level = factor(Level, LEVEL_ORDER),
            ckey = factor(ckey, COLS$ckey),
            offscale = hr_sd < FOREST_XLIM[1] | hr_sd > FOREST_XLIM[2],
-           hr_d = squish(hr_sd, FOREST_XLIM), lo_d = squish(lo_sd, FOREST_XLIM), hi_d = squish(hi_sd, FOREST_XLIM),
-           llab = sprintf("%s (n=%d, e=%d)", as.character(Level), N, N_events))
+           hr_d = squish(hr_sd, FOREST_XLIM), lo_d = squish(lo_sd, FOREST_XLIM), hi_d = squish(hi_sd, FOREST_XLIM))
   inter <- inter %>%
     mutate(ckey = paste0(ifelse(Dataset == "GSE39582", "GSE", "TCGA"), "_", Metric),
            Modifier = factor(Modifier, MOD_LEVELS), ckey = factor(ckey, COLS$ckey),
@@ -474,10 +482,16 @@ build_subgroup_figures <- function(run_dir, out_dir, primary_score = "Up_ssGSEA"
       geom_vline(xintercept = 1, linetype = "dashed", colour = "grey55") +
       geom_errorbarh(aes(xmin = lo_d, xmax = hi_d, colour = dir), height = 0.28, linewidth = 0.5) +
       geom_point(aes(colour = dir, shape = offscale), size = 2.1) +
+      # Per-cohort n / events, drawn INSIDE each facet (cohort x endpoint) at the
+      # left edge — the counts differ by cohort and by OS/RFS, so they cannot live
+      # on the single shared y-axis label without mislabelling 3 of the 4 columns.
+      geom_text(inherit.aes = FALSE,
+                aes(x = FOREST_XLIM[1], y = fct_rev(Level),
+                    label = sprintf("n=%d, e=%d", as.integer(N), as.integer(N_events))),
+                hjust = 0, vjust = -0.5, size = 1.95, colour = "grey45") +
       geom_text(data = di, inherit.aes = FALSE, aes(x = FOREST_XLIM[1], y = Inf, label = int_lab),
                 hjust = 0, vjust = 1.4, size = 2.5, colour = ifelse(di$int_sig, "#B2182B", "grey35")) +
-      scale_y_discrete(labels = function(v) {
-        m <- ds$llab[match(v, as.character(ds$Level))]; ifelse(is.na(m), v, m) }) +
+      scale_y_discrete() +
       facet_grid(Modifier ~ ckey, scales = "free_y", space = "free_y", switch = "y",
                  labeller = labeller(ckey = col_lab_map, Modifier = function(x) MOD_LABEL[x])) +
       scale_x_log10(limits = FOREST_XLIM, breaks = c(0.1, 0.3, 1, 3, 10),
@@ -486,7 +500,7 @@ build_subgroup_figures <- function(run_dir, out_dir, primary_score = "Up_ssGSEA"
       scale_shape_manual(values = c(`FALSE` = 16, `TRUE` = 21),
                          labels = c(`FALSE` = "in range", `TRUE` = "off-scale (squished)"), name = NULL) +
       labs(title = paste0("Per-subgroup hazard ratio of ", SCORES[[score_col]], " score"),
-           subtitle = "Continuous-score Cox HR per 1 SD within each subgroup (95% CI); x truncated to [0.1, 10].",
+           subtitle = "Continuous-score Cox HR per 1 SD within each subgroup (95% CI); x truncated to [0.1, 10]. n / e = subgroup size / events in that cohort.",
            x = "Hazard ratio per 1 SD (log scale)", y = NULL) +
       .base_theme +
       theme(strip.placement = "outside",
@@ -508,7 +522,222 @@ build_subgroup_figures <- function(run_dir, out_dir, primary_score = "Up_ssGSEA"
 }
 
 # =============================================================================
-# Orchestrator — build all three groups from one run directory
+# GROUP 4 — univariable DTP-to-outcome WITHIN molecular/clinical subgroups
+#           (thesis Section 3.3). Distinct from group 3 (§3.4 multivariable
+#           effect-modification forest) and from groups 1-2 (§3.2 whole-cohort
+#           and adjuvant-treated contrasts). Reads only the run's CSVs.
+# =============================================================================
+# Core DTP scores (mirrors CORE_DTP_SCORES in core/config.R; defined locally so
+# this file still runs standalone without sourcing config).
+.CORE_SCORES  <- c("Up_ssGSEA", "Down_ssGSEA", "Composite_ssGSEA")
+.CORE_LABEL   <- c(Up_ssGSEA = "DTP Up", Down_ssGSEA = "DTP Down",
+                   Composite_ssGSEA = "DTP Composite")
+# Gate constants (match core/config.R; used only for the not-testable annotation
+# — the authoritative gate result is the Is_Testable column already in the CSV).
+if (!exists("MIN_COX_N")) MIN_COX_N <- 10
+
+# Classify a Project name into a subgroup category, or drop it. Priority
+# CMS > PDS > Stage > MSI resolves compound names (e.g. *_Stage3_4_Treated_MSS
+# -> Stage). Whole-cohort and pure treatment cohorts match nothing and are
+# excluded (they belong to §3.2).
+.subgroup_category <- function(project) {
+  if (grepl("_CMS[1-4]$", project))                      return("CMS")
+  if (grepl("_PDS[1-3]$", project) || grepl("_Mixed$", project)) return("PDS")
+  if (grepl("Stage", project))                           return("Stage")
+  if (grepl("_MSS$|_MSI$", project))                     return("MSI")
+  NA_character_
+}
+.subgroup_label <- function(project) gsub("_", " ", sub("^(GSE|TCGA)_", "", project))
+
+# Reconstruct subgroup membership from a clinical frame, mirroring the cohort
+# definitions in modules/crc_survival.R, so the within-subgroup score SD can be
+# computed to rescale the Cox HR per 1 SD (as in Fig 2). Fails loudly for a kept
+# Project it does not recognise rather than silently returning nothing.
+.subgroup_members <- function(clin, project, dataset) {
+  na0 <- function(x) { x[is.na(x)] <- FALSE; x }
+  if (grepl("_CMS[1-4]$", project)) return(na0(clin$CMS == sub(".*_", "", project)))
+  if (grepl("_PDS[1-3]$", project)) return(na0(clin$PDS == sub(".*_", "", project)))
+  if (grepl("_Mixed$", project))    return(na0(clin$PDS == "Mixed"))
+  m <- if (dataset == "GSE39582") switch(project,
+      "GSE_All_MSS"              = clin$MMR == "pMMR",
+      "GSE_Stage3_4_Treated"     = clin$TNM_stage %in% c(3, 4) & clin$Chemo_adj == "Y",
+      "GSE_Stage3_Treated"       = clin$TNM_stage %in% c(3)    & clin$Chemo_adj == "Y",
+      "GSE_Stage3_4_Treated_MSS" = clin$TNM_stage %in% c(3, 4) & clin$Chemo_adj == "Y" & clin$MMR == "pMMR",
+      "GSE_Stage2_Untreated_MSS" = clin$TNM_stage == 2 & clin$Chemo_adj == "N" & clin$MMR == "pMMR",
+      "GSE_Stage3_Treated_MSS"   = clin$TNM_stage == 3 & clin$Chemo_adj == "Y" & clin$MMR == "pMMR",
+      "GSE_Stage34_Treated_MSS"  = clin$TNM_stage %in% c(3, 4) & clin$Chemo_adj == "Y" & clin$MMR == "pMMR",
+      NULL)
+    else switch(project,
+      "TCGA_All_MSS"          = clin$paper_MSI_status == "MSS",
+      "TCGA_All_MSI"          = clin$paper_MSI_status %in% c("MSI-H", "MSI-L"),
+      "TCGA_Stage1_Untreated" = clin$Stage == "I"  & clin$Treatment_Status == "Not Treated",
+      "TCGA_Stage2_Untreated" = clin$Stage == "II" & clin$Treatment_Status == "Not Treated",
+      NULL)
+  if (is.null(m))
+    stop("[group 4] no membership rule for kept subgroup '", project,
+         "'; add it to .subgroup_members() (mirror modules/crc_survival.R).")
+  na0(m)
+}
+
+build_subtype_survival_figures <- function(run_dir, out_dir) {
+  message("[group 4] subtype/subgroup univariable survival (§3.3)")
+  .dplyr_local(environment())
+
+  stats <- .rd(run_dir, "CRC_Statistical_Summary.csv")
+  sss   <- .rd(run_dir, "Subtype_Score_Stats.csv")
+  need_stats <- c("Dataset","Project","Test","Metric","Score","Raw_P","Effect_r","HR",
+                  "HR_lower","HR_upper","C_index","N","N_events","Is_Testable","FDR_P","Is_Significant")
+  need_sss   <- c("Dataset","Subtype_Axis","Score","Raw_P","Eps2","N","K","FDR_P","Is_Significant")
+  miss1 <- setdiff(need_stats, names(stats)); miss2 <- setdiff(need_sss, names(sss))
+  if (length(miss1)) stop("CRC_Statistical_Summary.csv missing column(s): ", paste(miss1, collapse = ", "))
+  if (length(miss2)) stop("Subtype_Score_Stats.csv missing column(s): ",   paste(miss2, collapse = ", "))
+
+  clin  <- list(GSE39582 = .rd(run_dir, "GSE39582_clinical.csv"),
+                "TCGA-COAD" = .rd(run_dir, "TCGA_COAD_clinical.csv"))
+  metric_cols <- function(m) if (m == "OS") c(t = "OS3Y_delay", e = "OS3Y_event")
+                             else            c(t = "RFS3Y_delay", e = "RFS3Y_event")
+  # Within-subgroup score SD (non-NA score/time/event), computed once per member set.
+  sd_of <- function(ds, project, score, metric) {
+    d <- clin[[ds]]; mc <- metric_cols(metric)
+    if (!all(c(score, mc[["t"]], mc[["e"]]) %in% names(d))) return(NA_real_)
+    mem <- .subgroup_members(d, project, ds); d <- d[mem, , drop = FALSE]
+    v <- suppressWarnings(as.numeric(d[[score]]))
+    ok <- !is.na(v) & !is.na(d[[mc[["t"]]]]) & !is.na(d[[mc[["e"]]]])
+    if (sum(ok) < 2) return(NA_real_)
+    stats::sd(v[ok])
+  }
+  # Pull one stat cell (returns NA-filled list if the row is absent).
+  cell <- function(ds, project, test, metric, score) {
+    s <- stats[stats$Dataset == ds & stats$Project == project & stats$Test == test &
+               stats$Metric == metric & stats$Score == score, ]
+    if (!nrow(s)) return(NULL)
+    s[1, ]
+  }
+
+  # Subgroup universe: every Project that classifies into a subgroup category.
+  proj <- unique(stats[, c("Dataset", "Project")])
+  proj$Category <- vapply(proj$Project, .subgroup_category, character(1))
+  proj <- proj[!is.na(proj$Category), , drop = FALSE]
+  if (!nrow(proj)) stop("[group 4] no subgroup cohorts found in CRC_Statistical_Summary.csv")
+  proj$Subgroup <- vapply(proj$Project, .subgroup_label, character(1))
+  proj$dtag     <- ifelse(proj$Dataset == "GSE39582", "GSE", "TCGA")
+  proj$ylab     <- paste0(proj$dtag, " · ", proj$Subgroup)
+  CAT_LEVELS <- intersect(c("CMS","PDS","Stage","MSI"), unique(proj$Category))
+
+  END_LAB   <- c(OS = "3-yr OS", RFS = "3-yr RFS")
+  metrics   <- c("OS", "RFS")
+
+  # ---- Assemble long cell table (all core scores; table uses all, Panel A a subset) ----
+  rows <- list()
+  for (i in seq_len(nrow(proj))) {
+    p <- proj[i, ]
+    for (sc in .CORE_SCORES) for (mt in metrics) {
+      cx <- cell(p$Dataset, p$Project, "Cox",      mt, sc)
+      wl <- cell(p$Dataset, p$Project, "Wilcoxon", mt, sc)
+      km <- cell(p$Dataset, p$Project, "KM",       mt, sc)
+      if (is.null(cx)) next
+      testable <- isTRUE(as.logical(cx$Is_Testable))
+      sd_sc <- if (testable) sd_of(p$Dataset, p$Project, sc, mt) else NA_real_
+      to_sd <- function(x) { x <- suppressWarnings(as.numeric(x));
+        if (!testable || is.na(x) || is.na(sd_sc)) NA_real_ else exp(log(x) * sd_sc) }
+      hr_sd <- to_sd(cx$HR); lo_sd <- to_sd(cx$HR_lower); hi_sd <- to_sd(cx$HR_upper)
+      rows[[length(rows) + 1]] <- tibble(
+        Dataset = p$Dataset, Category = p$Category, Subgroup = p$Subgroup, ylab = p$ylab,
+        Score = sc, Endpoint = mt, N = as.integer(cx$N), N_events = as.integer(cx$N_events),
+        Is_Testable = testable,
+        Effect_r = suppressWarnings(as.numeric(wl$Effect_r %||% NA)),
+        Wilcoxon_FDR_P = suppressWarnings(as.numeric(wl$FDR_P %||% NA)),
+        HR_perSD = hr_sd, HR_lower_perSD = lo_sd, HR_upper_perSD = hi_sd,
+        log2HR = ifelse(is.na(hr_sd), NA_real_, log2(hr_sd)),
+        Cox_FDR_P = suppressWarnings(as.numeric(cx$FDR_P)),
+        Cox_sig = isTRUE(as.logical(cx$Is_Significant)),
+        C_index = suppressWarnings(as.numeric(cx$C_index)),
+        KM_logrank_FDR_P = suppressWarnings(as.numeric(km$FDR_P %||% NA)))
+    }
+  }
+  cells <- bind_rows(rows)
+  if (!nrow(cells)) stop("[group 4] no Cox cells assembled for subgroup cohorts")
+  cells$Category <- factor(cells$Category, CAT_LEVELS)
+  cells$ylab     <- factor(cells$ylab, levels = rev(unique(proj$ylab[order(proj$Category, proj$dtag, proj$Subgroup)])))
+
+  # =========================== Panel A: tile grid ===========================
+  A_SCORES <- c("Up_ssGSEA", "Composite_ssGSEA")   # primary display (Down in table)
+  ck_lab <- c(`Up_ssGSEA|OS` = "DTP Up\n(3-yr OS)", `Up_ssGSEA|RFS` = "DTP Up\n(3-yr RFS)",
+              `Composite_ssGSEA|OS` = "DTP Comp.\n(3-yr OS)", `Composite_ssGSEA|RFS` = "DTP Comp.\n(3-yr RFS)")
+  pa <- cells %>% filter(Score %in% A_SCORES) %>%
+    mutate(ckey = factor(paste0(Score, "|", Endpoint), levels = names(ck_lab)),
+           tile_label = ifelse(!Is_Testable, "n/t",
+                        ifelse(Cox_sig, .sig_stars(Cox_FDR_P, ""), "")))
+  lim <- min(max(abs(pa$log2HR[is.finite(pa$log2HR)]), na.rm = TRUE), 2)
+  fig_A <- ggplot(pa, aes(x = ckey, y = ylab, fill = pmax(pmin(log2HR, lim), -lim))) +
+    geom_tile(colour = "white", linewidth = 0.6) +
+    geom_text(aes(label = tile_label),
+              colour = ifelse(pa$tile_label == "n/t", "grey45", "grey10"),
+              fontface = "bold", size = 3.1, vjust = 0.78) +
+    facet_grid(Category ~ ., scales = "free_y", space = "free_y", switch = "y") +
+    scale_fill_gradient2(low = "#3B6EA5", mid = "white", high = "#E64B35", midpoint = 0,
+      limits = c(-lim, lim), name = expression(log[2]~"HR (per 1 SD of score)"),
+      guide = guide_colourbar(barwidth = 9, barheight = 0.5, title.vjust = 1), na.value = "grey85") +
+    scale_x_discrete(labels = ck_lab) +
+    labs(title = "DTP score vs 3-year outcome within molecular and clinical subgroups",
+         subtitle = paste0("Univariable Cox HR per 1 SD (landmark 36 mo). * = FDR<0.05.  ",
+                           "Grey \"n/t\" = not testable (< ", MIN_EVENTS, " events / ", MIN_COX_N,
+                           " n), distinct from tested-but-null.\n",
+                           "Most subgroups are underpowered: a non-significant or not-testable cell is NOT evidence of absence."),
+         x = NULL, y = NULL) +
+    .base_theme + theme(axis.text.x = element_text(size = 8, lineheight = 0.85),
+                        axis.text.y = element_text(size = 8),
+                        strip.placement = "outside",
+                        strip.text.y.left = element_text(angle = 0, face = "bold", size = 9),
+                        panel.spacing.y = unit(4, "pt"))
+
+  # ============= Panel B: score-across-subtype (Kruskal-Wallis eps^2) =============
+  pb <- sss %>% filter(Score %in% .CORE_SCORES, Subtype_Axis %in% c("CMS", "PDS")) %>%
+    mutate(Score = factor(.CORE_LABEL[Score], rev(unname(.CORE_LABEL))),
+           Axis  = factor(paste0(Subtype_Axis, " subtype"), c("CMS subtype", "PDS subtype")),
+           eps2  = suppressWarnings(as.numeric(Eps2)),
+           star  = .sig_stars(FDR_P, ""))
+  fig_B <- ggplot(pb, aes(x = Dataset, y = Score, fill = eps2)) +
+    geom_tile(colour = "white", linewidth = 0.6) +
+    geom_text(aes(label = ifelse(star == "", sprintf("%.02f", eps2),
+                                 paste0(sprintf("%.02f", eps2), " ", star))),
+              size = 3.0, fontface = "bold", colour = "grey10") +
+    facet_grid(. ~ Axis) +
+    scale_fill_gradient(low = "white", high = "#762A83", limits = c(0, NA),
+      name = expression(epsilon^2~"(effect size)"),
+      guide = guide_colourbar(barwidth = 9, barheight = 0.5, title.vjust = 1)) +
+    labs(title = "Does the DTP score itself differ across subtypes? (Kruskal-Wallis)",
+         subtitle = "Epsilon-squared effect size across subtype levels; * = FDR<0.05 (BH).",
+         x = NULL, y = NULL) +
+    .base_theme + theme(axis.text.x = element_text(size = 9),
+                        panel.spacing.x = unit(6, "pt"))
+
+  # ---- Save panels + composite ----
+  n_sub <- nlevels(cells$ylab); a_h <- max(4.5, 0.32 * n_sub + 2.6)
+  .save_fig(fig_A, "Fig3_3A_subgroup_hr_matrix", 8.8, a_h, out_dir)
+  .save_fig(fig_B, "Fig3_3B_score_across_subtype", 7.5, 3.2, out_dir)
+  composite <- wrap_elements(fig_A) / wrap_elements(fig_B) +
+    plot_layout(heights = c(a_h, 3.4)) + plot_annotation(tag_levels = "A") &
+    theme(plot.tag = element_text(face = "bold", size = 16))
+  .save_fig(composite, "Fig3_subtype_survival_composite", 9.5, a_h + 3.9, out_dir)
+
+  # ================================ Table 3.3 ================================
+  rd2 <- function(x) round(x, 2); rd3 <- function(x) round(x, 3)
+  tbl <- cells %>%
+    transmute(Dataset, Category = as.character(Category), Subgroup, Score, Endpoint,
+              N, N_events, Is_Testable,
+              Effect_r = rd2(Effect_r), Wilcoxon_FDR_P = rd3(Wilcoxon_FDR_P),
+              HR_perSD = rd2(HR_perSD), HR_lower = rd2(HR_lower_perSD), HR_upper = rd2(HR_upper_perSD),
+              Cox_FDR_P = rd3(Cox_FDR_P), C_index = rd2(C_index),
+              KM_logrank_FDR_P = rd3(KM_logrank_FDR_P)) %>%
+    arrange(factor(Category, CAT_LEVELS), Subgroup,
+            factor(Score, .CORE_SCORES), factor(Endpoint, metrics))
+  readr::write_csv(tbl, file.path(out_dir, "Table_3_3_subtype_survival.csv"))
+  message("  wrote Table_3_3_subtype_survival.csv (", nrow(tbl), " rows)")
+}
+
+# =============================================================================
+# Orchestrator — build all figure groups from one run directory
 # =============================================================================
 build_crc_composites <- function(run_dir, out_dir = file.path(run_dir, "composites")) {
   stopifnot(dir.exists(run_dir))
@@ -517,9 +746,10 @@ build_crc_composites <- function(run_dir, out_dir = file.path(run_dir, "composit
   # Each group is guarded so a missing input for one does not sink the others.
   # A failure is BOTH messaged (in-line) and warned (so it lands in the end-of-run
   # "Warning messages:" summary) — a silent skip must not slip past unnoticed.
-  groups <- list("1 (outcomes)"  = build_outcome_figures,
-                 "2 (KM)"         = build_km_figures,
-                 "3 (subgroups)"  = build_subgroup_figures)
+  groups <- list("1 (outcomes)"       = build_outcome_figures,
+                 "2 (KM)"              = build_km_figures,
+                 "3 (subgroups)"       = build_subgroup_figures,
+                 "4 (subtype survival)" = build_subtype_survival_figures)
   status <- setNames(logical(length(groups)), names(groups))
   for (nm in names(groups)) {
     status[[nm]] <- tryCatch({ groups[[nm]](run_dir, out_dir); TRUE },
