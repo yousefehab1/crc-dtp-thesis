@@ -539,18 +539,24 @@ build_subgroup_figures <- function(run_dir, out_dir, primary_score = "Up_ssGSEA"
 # — the authoritative gate result is the Is_Testable column already in the CSV).
 if (!exists("MIN_COX_N")) MIN_COX_N <- 10
 
-# Classify a Project name into a subgroup category, or drop it. Priority
-# CMS > PDS > Stage > MSI resolves compound names (e.g. *_Stage3_4_Treated_MSS
-# -> Stage). Whole-cohort and pure treatment cohorts match nothing and are
-# excluded (they belong to §3.2).
+# Classify a Project name into a subgroup category, or drop it. Matches only PURE
+# cohorts: *_Stage[1-4] (NOT the treatment/MSS-qualified stage subsets) and
+# *_All_MSS/MSI. Compound and whole-cohort projects match nothing and are excluded
+# (they belong to §3.2 / §3.4).
 .subgroup_category <- function(project) {
   if (grepl("_CMS[1-4]$", project))                      return("CMS")
   if (grepl("_PDS[1-3]$", project) || grepl("_Mixed$", project)) return("PDS")
-  if (grepl("Stage", project))                           return("Stage")
-  if (grepl("_MSS$|_MSI$", project))                     return("MSI")
+  if (grepl("_Stage[1-4]$", project))                    return("Stage")   # pure stage only
+  if (grepl("_All_MSS$|_All_MSI$", project))             return("MSI")     # pure MSI only
   NA_character_
 }
-.subgroup_label <- function(project) gsub("_", " ", sub("^(GSE|TCGA)_", "", project))
+.subgroup_label <- function(project) {
+  s <- gsub("_", " ", sub("^(GSE|TCGA)_", "", project))
+  for (r in list(c("Stage1","Stage I"), c("Stage2","Stage II"),
+                 c("Stage3","Stage III"), c("Stage4","Stage IV")))
+    s <- sub(r[[1]], r[[2]], s, fixed = TRUE)   # "Stage3" -> "Stage III"
+  s
+}
 
 # Reconstruct subgroup membership from a clinical frame, mirroring the cohort
 # definitions in modules/crc_survival.R, so the within-subgroup score SD can be
@@ -562,19 +568,20 @@ if (!exists("MIN_COX_N")) MIN_COX_N <- 10
   if (grepl("_PDS[1-3]$", project)) return(na0(clin$PDS == sub(".*_", "", project)))
   if (grepl("_Mixed$", project))    return(na0(clin$PDS == "Mixed"))
   m <- if (dataset == "GSE39582") switch(project,
-      "GSE_All_MSS"              = clin$MMR == "pMMR",
-      "GSE_Stage3_4_Treated"     = clin$TNM_stage %in% c(3, 4) & clin$Chemo_adj == "Y",
-      "GSE_Stage3_Treated"       = clin$TNM_stage %in% c(3)    & clin$Chemo_adj == "Y",
-      "GSE_Stage3_4_Treated_MSS" = clin$TNM_stage %in% c(3, 4) & clin$Chemo_adj == "Y" & clin$MMR == "pMMR",
-      "GSE_Stage2_Untreated_MSS" = clin$TNM_stage == 2 & clin$Chemo_adj == "N" & clin$MMR == "pMMR",
-      "GSE_Stage3_Treated_MSS"   = clin$TNM_stage == 3 & clin$Chemo_adj == "Y" & clin$MMR == "pMMR",
-      "GSE_Stage34_Treated_MSS"  = clin$TNM_stage %in% c(3, 4) & clin$Chemo_adj == "Y" & clin$MMR == "pMMR",
+      "GSE_All_MSS" = clin$MMR == "pMMR",
+      "GSE_All_MSI" = clin$MMR == "dMMR",
+      "GSE_Stage1"  = clin$TNM_stage == 1,
+      "GSE_Stage2"  = clin$TNM_stage == 2,
+      "GSE_Stage3"  = clin$TNM_stage == 3,
+      "GSE_Stage4"  = clin$TNM_stage == 4,
       NULL)
     else switch(project,
-      "TCGA_All_MSS"          = clin$paper_MSI_status == "MSS",
-      "TCGA_All_MSI"          = clin$paper_MSI_status %in% c("MSI-H", "MSI-L"),
-      "TCGA_Stage1_Untreated" = clin$Stage == "I"  & clin$Treatment_Status == "Not Treated",
-      "TCGA_Stage2_Untreated" = clin$Stage == "II" & clin$Treatment_Status == "Not Treated",
+      "TCGA_All_MSS" = clin$paper_MSI_status == "MSS",
+      "TCGA_All_MSI" = clin$paper_MSI_status %in% c("MSI-H", "MSI-L"),
+      "TCGA_Stage1"  = clin$Stage == "I",
+      "TCGA_Stage2"  = clin$Stage == "II",
+      "TCGA_Stage3"  = clin$Stage == "III",
+      "TCGA_Stage4"  = clin$Stage == "IV",
       NULL)
   if (is.null(m))
     stop("[group 4] no membership rule for kept subgroup '", project,
@@ -683,7 +690,7 @@ build_subtype_survival_figures <- function(run_dir, out_dir) {
       guide = guide_colourbar(barwidth = 9, barheight = 0.5, title.vjust = 1), na.value = "grey85") +
     scale_x_discrete(labels = ck_lab) +
     labs(title = "DTP score vs 3-year outcome within molecular and clinical subgroups",
-         subtitle = paste0("Univariable Cox HR per 1 SD (landmark 36 mo). * = FDR<0.05.  ",
+         subtitle = paste0("Univariable Cox HR per 1 SD (landmark 36 mo). * = FDR<0.05.\n",
                            "Grey \"n/t\" = not testable (< ", MIN_EVENTS, " events / ", MIN_COX_N,
                            " n), distinct from tested-but-null.\n",
                            "Most subgroups are underpowered: a non-significant or not-testable cell is NOT evidence of absence."),

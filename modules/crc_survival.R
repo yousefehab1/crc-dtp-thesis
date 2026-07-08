@@ -113,7 +113,15 @@ run_crc_survival <- function(out_root, panel, crc_signatures = NULL) {
     "GSE_Stage3_Treated_MSS"    = clinical %>% dplyr::filter(MMR == "pMMR", TNM_stage == 3, Chemo_adj == "Y"),
     "GSE_Stage34_Treated_MSS"   = clinical %>% dplyr::filter(MMR == "pMMR", TNM_stage %in% c(3, 4), Chemo_adj == "Y")
   )
-  gse_cohorts <- c(gse_violin_cohorts, gse_km_cohorts,
+  # Pure per-stage + a dMMR/MSI cohort (any treatment/MSS) for the §3.3 subtype-survival figure.
+  gse_extra_cohorts <- list(
+    "GSE_Stage1"  = clinical %>% dplyr::filter(TNM_stage == 1),
+    "GSE_Stage2"  = clinical %>% dplyr::filter(TNM_stage == 2),
+    "GSE_Stage3"  = clinical %>% dplyr::filter(TNM_stage == 3),
+    "GSE_Stage4"  = clinical %>% dplyr::filter(TNM_stage == 4),
+    "GSE_All_MSI" = clinical %>% dplyr::filter(MMR == "dMMR")
+  )
+  gse_cohorts <- c(gse_violin_cohorts, gse_km_cohorts, gse_extra_cohorts,
                    subtype_cohorts(clinical, "CMS", "GSE"),
                    subtype_cohorts(clinical, "PDS", "GSE"))
   all_stats[["gse"]] <- run_survival_block(gse_cohorts, "GSE39582", score_cols)
@@ -201,7 +209,12 @@ run_crc_survival <- function(out_root, panel, crc_signatures = NULL) {
     "TCGA_Untreated"        = clinical_tcga %>% dplyr::filter(Treatment_Status == "Not Treated"),
     "TCGA_Treated"          = clinical_tcga %>% dplyr::filter(Treatment_Status == "Treated"),
     "TCGA_Stage1_Untreated" = clinical_tcga %>% dplyr::filter(Stage == "I",  Treatment_Status == "Not Treated"),
-    "TCGA_Stage2_Untreated" = clinical_tcga %>% dplyr::filter(Stage == "II", Treatment_Status == "Not Treated")
+    "TCGA_Stage2_Untreated" = clinical_tcga %>% dplyr::filter(Stage == "II", Treatment_Status == "Not Treated"),
+    # Pure per-stage cohorts (any treatment/MSS) for the §3.3 subtype-survival figure.
+    "TCGA_Stage1"           = clinical_tcga %>% dplyr::filter(Stage == "I"),
+    "TCGA_Stage2"           = clinical_tcga %>% dplyr::filter(Stage == "II"),
+    "TCGA_Stage3"           = clinical_tcga %>% dplyr::filter(Stage == "III"),
+    "TCGA_Stage4"           = clinical_tcga %>% dplyr::filter(Stage == "IV")
   )
   if (has_msi) {
     tcga_cohorts[["TCGA_All_MSS"]] <- clinical_tcga %>% dplyr::filter(paper_MSI_status == "MSS")
