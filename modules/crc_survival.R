@@ -268,7 +268,11 @@ run_crc_survival <- function(out_root, panel, crc_signatures = NULL) {
   # Does CMS / PDS / Stage / MSI explain away (confound) or modify the score's
   # OS/RFS association? Adjusted Cox + interaction Cox on the core DTP scores.
   # ------------------------------------------------------------------------
+  # Treated-Marisa is carried as an extra "cohort" (a GSE subset) so the subgroup
+  # forest gets Treated-Marisa OS/RFS columns matching Figs 1-2. FDR is grouped by
+  # Dataset, so these rows form their own family and leave the whole-cohort cells intact.
   cox_data    <- list("GSE39582" = harmonize_crc_modifiers(clinical, "GSE39582"),
+                      "GSE39582 (treated)" = harmonize_crc_modifiers(dplyr::filter(clinical, Chemo_adj == "Y"), "GSE39582"),
                       "TCGA-COAD" = harmonize_crc_modifiers(clinical_tcga, "TCGA-COAD"))
   core_scores <- intersect(CORE_DTP_SCORES, score_cols)
   adj_specs   <- list(Clinicopath = c("Stage_bin", "MSI_group"),

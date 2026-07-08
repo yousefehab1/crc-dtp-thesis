@@ -420,17 +420,20 @@ build_subgroup_figures <- function(run_dir, out_dir, primary_score = "Up_ssGSEA"
   MOD_LABEL  <- c(CMS = "CMS subtype", PDS = "PDS subtype", Stage_bin = "Stage", MSI_group = "MSI status")
   MOD_LEVELS <- names(MOD_LABEL)
   LEVEL_ORDER <- c("CMS1","CMS2","CMS3","CMS4","PDS1","PDS2","PDS3","Early","Late","MSS","MSI")
-  COLS <- tibble(ckey = c("GSE_OS","GSE_RFS","TCGA_OS","TCGA_RFS"),
-                 Dataset = c("GSE39582","GSE39582","TCGA-COAD","TCGA-COAD"),
-                 Metric  = c("OS","RFS","OS","RFS"),
-                 clab = c("Marisa\n(OS)","Marisa\n(RFS)","TCGA\n(OS)","TCGA\n(RFS)"))
+  COLS <- tibble(ckey = c("GSE_OS","GSE_RFS","GSEt_OS","GSEt_RFS","TCGA_OS","TCGA_RFS"),
+                 Dataset = c("GSE39582","GSE39582","GSE39582 (treated)","GSE39582 (treated)","TCGA-COAD","TCGA-COAD"),
+                 Metric  = c("OS","RFS","OS","RFS","OS","RFS"),
+                 clab = c("Marisa\n(OS)","Marisa\n(RFS)","Marisa treated\n(OS)","Marisa treated\n(RFS)","TCGA\n(OS)","TCGA\n(RFS)"))
   col_lab_map <- setNames(COLS$clab, COLS$ckey)
+  DS_PREFIX <- c("GSE39582" = "GSE", "GSE39582 (treated)" = "GSEt", "TCGA-COAD" = "TCGA")
   DIR_PAL <- c("Higher hazard (HR>1)" = "#E64B35", "Lower hazard (HR<1)" = "#3B6EA5")
 
   subg  <- .rd(run_dir, "Subgroup_Score_HRs.csv")
   inter <- .rd(run_dir, "Interaction_Cox_Summary.csv")
   clin  <- list(GSE39582 = .rd(run_dir, "GSE39582_clinical.csv"),
                 "TCGA-COAD" = .rd(run_dir, "TCGA_COAD_clinical.csv"))
+  # Treated-Marisa subset so sd_of() rescales the treated columns on the treated SD.
+  clin[["GSE39582 (treated)"]] <- clin$GSE39582[which(clin$GSE39582$Chemo_adj == "Y"), , drop = FALSE]
   metric_evt <- c(OS = "OS3Y_event", RFS = "RFS3Y_event")
   sd_of <- function(ds, metric, score) {
     d <- clin[[ds]]; ev <- metric_evt[[metric]]
@@ -440,7 +443,7 @@ build_subgroup_figures <- function(run_dir, out_dir, primary_score = "Up_ssGSEA"
   }
 
   subg <- subg %>%
-    mutate(ckey = paste0(ifelse(Dataset == "GSE39582", "GSE", "TCGA"), "_", Metric),
+    mutate(ckey = paste0(unname(DS_PREFIX[Dataset]), "_", Metric),
            sd_sc = mapply(sd_of, Dataset, Metric, Score),
            hr_sd = exp(log(HR) * sd_sc), lo_sd = exp(log(HR_lower) * sd_sc), hi_sd = exp(log(HR_upper) * sd_sc),
            Modifier = factor(Modifier, MOD_LEVELS), Level = factor(Level, LEVEL_ORDER),
@@ -448,7 +451,7 @@ build_subgroup_figures <- function(run_dir, out_dir, primary_score = "Up_ssGSEA"
            offscale = hr_sd < FOREST_XLIM[1] | hr_sd > FOREST_XLIM[2],
            hr_d = squish(hr_sd, FOREST_XLIM), lo_d = squish(lo_sd, FOREST_XLIM), hi_d = squish(hi_sd, FOREST_XLIM))
   inter <- inter %>%
-    mutate(ckey = paste0(ifelse(Dataset == "GSE39582", "GSE", "TCGA"), "_", Metric),
+    mutate(ckey = paste0(unname(DS_PREFIX[Dataset]), "_", Metric),
            Modifier = factor(Modifier, MOD_LEVELS), ckey = factor(ckey, COLS$ckey),
            int_lab = paste0("interaction FDR ", ifelse(is.na(FDR_P), "NA",
                               ifelse(FDR_P < 0.001, "p<0.001", sprintf("p=%.3f", FDR_P))), .sig_stars(FDR_P)),
@@ -509,16 +512,16 @@ build_subgroup_figures <- function(run_dir, out_dir, primary_score = "Up_ssGSEA"
             axis.text.y = element_text(size = 7.5), panel.spacing = unit(4, "pt"),
             panel.grid.major.x = element_line(colour = "grey93", linewidth = 0.3))
   }
-  .save_fig(fig_matrix, "Fig3A_interaction_matrix", 9.5, 3.4, out_dir)
+  .save_fig(fig_matrix, "Fig3A_interaction_matrix", 12.5, 3.4, out_dir)
   forests <- list()
   for (sc in names(SCORES)) {
     forests[[sc]] <- build_forest(sc)
-    .save_fig(forests[[sc]], paste0("Fig3B_subgroup_forest_", sub("_ssGSEA", "", sc)), 10.5, 8.0, out_dir)
+    .save_fig(forests[[sc]], paste0("Fig3B_subgroup_forest_", sub("_ssGSEA", "", sc)), 14.0, 8.0, out_dir)
   }
   composite <- wrap_elements(fig_matrix) / wrap_elements(forests[[primary_score]]) +
     plot_layout(heights = c(3.4, 8.2)) + plot_annotation(tag_levels = "A") &
     theme(plot.tag = element_text(face = "bold", size = 16))
-  .save_fig(composite, "Fig3_subgroup_composite", 11.0, 12.2, out_dir)
+  .save_fig(composite, "Fig3_subgroup_composite", 14.0, 12.2, out_dir)
 }
 
 # =============================================================================
