@@ -218,6 +218,7 @@ run_mets_de <- function(out_root, panel, core_signature = "UP") {
   message("  Running GSEA: Primary vs Metastasis")
   gsea_pm <- .run_gsea(res,
                         file.path(base, "results/GSEA_PrimaryVsMetastasis_Summary.csv"))
+  saveRDS(gsea_pm, file.path(base, "results/gsea_PrimaryVsMetastasis.rds"))  # for the composite
   .save_gsea_plots(gsea_pm,
                    out_dir     = file.path(base, "plots/GSEA/PrimaryVsMetastasis"),
                    label_left  = "Up in Metastasis",
@@ -234,10 +235,21 @@ run_mets_de <- function(out_root, panel, core_signature = "UP") {
     dplyr::filter(!is.na(stat))
   gsea_np <- .run_gsea(res_np,
                         file.path(base, "results/GSEA_NormalVsPrimary_Summary.csv"))
+  saveRDS(gsea_np, file.path(base, "results/gsea_NormalVsPrimary.rds"))  # for the composite
   .save_gsea_plots(gsea_np,
                    out_dir     = file.path(base, "plots/GSEA/NormalVsPrimary"),
                    label_left  = "Up in Normal",
                    label_right = "Up in Primary")
+
+  # --- Four-panel GSEA composite (A/B = Normal-vs-Primary enrichment + NES
+  #     heatmap; C/D = Primary-vs-Metastasis). Guarded so a plotting failure
+  #     does not sink the module; rebuildable via build_mets_gsea_composite(base).
+  tryCatch(
+    build_mets_gsea_composite(base),
+    error = function(e) {
+      msg <- paste0("Mets GSEA composite FAILED: ", conditionMessage(e))
+      message("  ", msg); warning(msg, call. = FALSE)
+    })
 
   # ---- PCA (3-way) -----------------------------------------------------------
   save_pca <- function(mat, meta, filename, title) {

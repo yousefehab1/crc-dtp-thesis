@@ -134,3 +134,94 @@ plot_gsea_enrichment <- function(gsea_obj,
   p_es / p_hits / p_stat +
     patchwork::plot_layout(heights = c(5, n_sets * 0.65 + 0.3, 2))
 }
+
+# ---------------------------------------------------------------------------
+# .mets_nes_heatmap()  —  one-column NES heatmap (fill = NES, label = NES +
+# FDR stars) over all signatures for a single GSEA contrast. Signatures are
+# ordered top->bottom by `sig_order`; fill limits `lim` are shared across the
+# two contrasts so the colours are directly comparable.
+# ---------------------------------------------------------------------------
+.mets_stars <- function(p) ifelse(is.na(p), "",
+  ifelse(p < 0.001, "***", ifelse(p < 0.01, "**", ifelse(p < 0.05, "*", ""))))
+
+.mets_nes_heatmap <- function(gsea_df, contrast_lab, pos_label, sig_order, lim) {
+  d <- gsea_df
+  d$Signature <- factor(d$ID, levels = rev(sig_order))
+  d$Contrast  <- contrast_lab
+  d$lab <- paste0(sprintf("%.2f", d$NES), .mets_stars(d$p.adjust))
+  ggplot2::ggplot(d, ggplot2::aes(x = Contrast, y = Signature, fill = NES)) +
+    ggplot2::geom_tile(colour = "white", linewidth = 0.6) +
+    ggplot2::geom_text(ggplot2::aes(label = lab), size = 3, fontface = "bold",
+                       colour = "grey10") +
+    ggplot2::scale_fill_gradient2(low = "#3B6EA5", mid = "white", high = "#E64B35",
+      midpoint = 0, limits = c(-lim, lim), name = "NES") +
+    ggplot2::labs(title = sprintf("NES + FDR (+NES = up in %s)", pos_label),
+                  x = NULL, y = NULL) +
+    pub_theme +
+    ggplot2::theme(legend.position = "right",
+                   panel.grid  = ggplot2::element_blank(),
+                   axis.ticks  = ggplot2::element_blank(),
+                   plot.title  = ggplot2::element_text(size = 11, face = "bold", hjust = 0))
+}
+
+# ---------------------------------------------------------------------------
+# build_mets_gsea_composite()
+#
+# Four-panel composite for the mets GSEA analysis (thesis mets figure):
+#   A  Normal-vs-Primary     all-signature enrichment plot
+#   B  Normal-vs-Primary     NES heatmap (fill = NES, label = NES + FDR stars)
+#   C  Primary-vs-Metastasis all-signature enrichment plot
+#   D  Primary-vs-Metastasis NES heatmap
+#
+# Rebuildable from a completed run: reads the two saved gseaResult objects
+# (results/gsea_{NormalVsPrimary,PrimaryVsMetastasis}.rds written by
+# run_mets_de). NES / FDR for the heatmaps come from as.data.frame(obj).
+# ---------------------------------------------------------------------------
+build_mets_gsea_composite <- function(mets_dir,
+                                      out_dir = file.path(mets_dir, "plots", "GSEA")) {
+  np_rds <- file.path(mets_dir, "results", "gsea_NormalVsPrimary.rds")
+  pm_rds <- file.path(mets_dir, "results", "gsea_PrimaryVsMetastasis.rds")
+  if (!file.exists(np_rds) || !file.exists(pm_rds))
+    stop("build_mets_gsea_composite(): missing gsea RDS in ",
+         file.path(mets_dir, "results"), " (run run_mets_de first).")
+  gsea_np <- readRDS(np_rds); gsea_pm <- readRDS(pm_rds)
+
+  df_np <- as.data.frame(gsea_np); df_pm <- as.data.frame(gsea_pm)
+  if (!nrow(df_np) || !nrow(df_pm))
+    stop("build_mets_gsea_composite(): empty GSEA result(s).")
+
+  # Shared signature order (top->bottom) = descending Primary-vs-Metastasis NES,
+  # the headline contrast; any signature absent there is appended.
+  ord       <- df_pm$ID[order(-df_pm$NES)]
+  sig_order <- c(ord, setdiff(union(df_np$ID, df_pm$ID), ord))
+  glim      <- max(abs(c(df_np$NES, df_pm$NES)), na.rm = TRUE)
+
+  A <- plot_gsea_enrichment(gsea_np, gene_set_ids = sig_order,
+         title = "Normal vs Primary: all signatures",
+         label_left = "Up in Normal", label_right = "Up in Primary")
+  B <- .mets_nes_heatmap(df_np, "N / P", pos_label = "Normal",     sig_order, glim)
+  C <- plot_gsea_enrichment(gsea_pm, gene_set_ids = sig_order,
+         title = "Primary vs Metastasis: all signatures",
+         label_left = "Up in Metastasis", label_right = "Up in Primary")
+  D <- .mets_nes_heatmap(df_pm, "P / M", pos_label = "Metastasis", sig_order, glim)
+
+  composite <- patchwork::wrap_plots(
+      patchwork::wrap_elements(A), patchwork::wrap_elements(B),
+      patchwork::wrap_elements(C), patchwork::wrap_elements(D),
+      ncol = 2, widths = c(3, 1)) +
+    patchwork::plot_annotation(
+      tag_levels = "A",
+      title = "Mets GSEA: signature enrichment across the Normal to Primary to Metastasis axis",
+      theme = ggplot2::theme(plot.title = ggplot2::element_text(face = "bold", size = 15))) &
+    ggplot2::theme(plot.tag = ggplot2::element_text(face = "bold", size = 16))
+
+  dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+  n_sig <- length(sig_order); h <- max(14, 2 * (n_sig * 0.55 + 4))
+  ggplot2::ggsave(file.path(out_dir, "Fig_Mets_GSEA_composite.pdf"), composite,
+                  width = 16, height = h, limitsize = FALSE, device = grDevices::pdf)
+  ggplot2::ggsave(file.path(out_dir, "Fig_Mets_GSEA_composite.png"), composite,
+                  width = 16, height = h, dpi = 300, bg = "white", limitsize = FALSE)
+  message("  wrote Fig_Mets_GSEA_composite (", n_sig, " signatures, ",
+          round(h, 1), " in tall)")
+  invisible(composite)
+}

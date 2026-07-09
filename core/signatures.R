@@ -8,7 +8,12 @@
 # Load sig.csv into a named list of character vectors (one per column).
 load_signature_panel <- function(path = SIG_FILE) {
   stopifnot(file.exists(path))
-  df <- read.csv(path, stringsAsFactors = FALSE, check.names = TRUE)
+  # Read with check.names=FALSE and strip a leading UTF-8 BOM from the header
+  # BEFORE make.names(): otherwise a BOM + "Down" header sanitises to "X...Down",
+  # silently renaming that signature. (fileEncoding="UTF-8-BOM" is NOT usable here
+  # — it truncates this file at its first non-UTF-8 byte, dropping most rows.)
+  df <- read.csv(path, stringsAsFactors = FALSE, check.names = FALSE)
+  names(df) <- make.names(sub("^﻿", "", names(df)))
   sets <- lapply(colnames(df), function(cn) {
     g <- unique(as.character(df[[cn]]))
     g <- g[!is.na(g) & trimws(g) != "" & !tolower(g) %in% c("na", "none")]
