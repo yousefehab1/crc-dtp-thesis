@@ -13,13 +13,24 @@
 # ==============================================================================
 
 # Extract running-ES data from a clusterProfiler gseaResult object.
-# Uses the enrichplot internal helper gsInfo; falls back gracefully.
+# Uses the enrichplot internal helper gsInfo(). The ID is validated up front so
+# a genuinely missing gene set and a broken/renamed gsInfo() (it is unexported,
+# so a Bioconductor upgrade can remove it) produce different, accurate errors.
 .gsea_running_data <- function(gsea_obj, gene_set_id) {
+  if (!requireNamespace("enrichplot", quietly = TRUE))
+    stop("enrichplot is required for plot_gsea_enrichment() (uses its internal ",
+         "gsInfo() helper). Install with: BiocManager::install('enrichplot')")
+  if (!gene_set_id %in% gsea_obj@result$ID)
+    stop("Gene set '", gene_set_id, "' is not present in the GSEA result. ",
+         "Available IDs: ",
+         paste(utils::head(gsea_obj@result$ID, 20L), collapse = ", "))
   tryCatch(
     enrichplot:::gsInfo(gsea_obj, gene_set_id),
     error = function(e)
-      stop("Cannot extract running-ES data for gene set '", gene_set_id,
-           "'. Verify the ID exists in the GSEA result.\nDetails: ", e$message)
+      stop("enrichplot:::gsInfo() failed for gene set '", gene_set_id,
+           "' — the installed enrichplot version may have changed or removed ",
+           "this unexported helper.\nDetails: ", conditionMessage(e),
+           call. = FALSE)
   )
 }
 
@@ -50,13 +61,23 @@ plot_gsea_enrichment <- function(gsea_obj,
 
   n_sets <- length(gene_set_ids)
 
-  # Assign colours
+  # Assign colours. Keyed to signature identity (alphabetical rank), NOT to the
+  # order the caller happened to pass, so a given signature keeps its colour
+  # across figures (the individual, combined, and composite plots pass the same
+  # set in different orders). When there are more signatures than palette
+  # swatches the palette is extended by a generated qualitative ramp, so colours
+  # never silently recycle two signatures onto the same colour.
   if (is.null(colors)) {
-    pal <- c("#E64B35", "#4DBBD5", "#00A087", "#3C5488",
-             "#F39B7F", "#8491B4", "#91D1C2", "#DC0000")
-    colors <- head(rep(pal, length.out = n_sets), n_sets)
+    pal  <- c("#E64B35", "#4DBBD5", "#00A087", "#3C5488",
+              "#F39B7F", "#8491B4", "#91D1C2", "#DC0000")
+    base <- if (n_sets <= length(pal)) pal[seq_len(n_sets)]
+            else grDevices::hcl.colors(n_sets, palette = "Dark 3")
+    colors <- setNames(base[rank(gene_set_ids, ties.method = "first")], gene_set_ids)
+  } else if (!is.null(names(colors)) && all(gene_set_ids %in% names(colors))) {
+    colors <- colors[gene_set_ids]               # honour caller-supplied names
+  } else {
+    colors <- setNames(rep_len(colors, n_sets), gene_set_ids)
   }
-  colors <- setNames(rep_len(colors, n_sets), gene_set_ids)
 
   # Collect per-gene-set running-ES data frames
   es_list <- lapply(gene_set_ids, function(id) {
@@ -65,9 +86,18 @@ plot_gsea_enrichment <- function(gsea_obj,
     df
   })
   es_all <- dplyr::bind_rows(es_list)
+  # Preserve the caller's order for the faceted hit panel and the legend — a
+  # character column would otherwise facet/sort alphabetically, desyncing the
+  # hit rows from the NES heatmaps drawn beside them in the composite.
+  es_all$GeneSet <- factor(es_all$GeneSet, levels = gene_set_ids)
   N      <- max(es_all$x)
-  y_rng  <- range(es_all$runningScore, na.rm = TRUE)
-  y_pad  <- diff(range(y_rng, 0)) * 0.13   # offset so labels don't overlap ES=0
+  # Pole labels sit in headroom ABOVE the curve envelope, so they never overprint
+  # the running-score line (for a negative-NES set the curve peaks below zero and
+  # the old data-max offset dropped the label straight onto the curve).
+  y_hi   <- max(es_all$runningScore, 0, na.rm = TRUE)
+  y_lo   <- min(es_all$runningScore, 0, na.rm = TRUE)
+  y_span <- y_hi - y_lo
+  y_lab  <- y_hi + y_span * 0.08
 
   # ---- Panel 1: Running enrichment score --------------------------------
   p_es <- ggplot2::ggplot(es_all,
@@ -75,19 +105,20 @@ plot_gsea_enrichment <- function(gsea_obj,
     ggplot2::geom_hline(yintercept = 0, linetype = "dashed",
                         colour = "grey45", linewidth = 0.55) +
     ggplot2::geom_line(linewidth = 0.9) +
-    # Direction annotations at top of the axis
+    # Direction annotations in the headroom above the curve
     ggplot2::annotate("text",
                       x     = N * 0.02,
-                      y     = max(y_rng[2], 0) - y_pad,
+                      y     = y_lab,
                       label = label_left,
                       hjust = 0, size = 3, colour = "grey30", fontface = "italic") +
     ggplot2::annotate("text",
                       x     = N * 0.98,
-                      y     = max(y_rng[2], 0) - y_pad,
+                      y     = y_lab,
                       label = label_right,
                       hjust = 1, size = 3, colour = "grey30", fontface = "italic") +
+    ggplot2::expand_limits(y = y_lab + y_span * 0.04) +
     ggplot2::scale_colour_manual(values = colors) +
-    ggplot2::scale_x_continuous(expand = c(0, 0)) +
+    ggplot2::scale_x_continuous(expand = c(0, 0), limits = c(1, N)) +
     ggplot2::labs(title  = title,
                   x      = NULL,
                   y      = "Enrichment Score",
@@ -107,7 +138,7 @@ plot_gsea_enrichment <- function(gsea_obj,
                           linewidth = 0.35, alpha = 0.75) +
     ggplot2::facet_wrap(~ GeneSet, ncol = 1, strip.position = "left") +
     ggplot2::scale_colour_manual(values = colors, guide = "none") +
-    ggplot2::scale_x_continuous(expand = c(0, 0)) +
+    ggplot2::scale_x_continuous(expand = c(0, 0), limits = c(1, N)) +
     ggplot2::scale_y_continuous(breaks = NULL, expand = c(0, 0)) +
     ggplot2::labs(x = NULL, y = NULL) +
     pub_theme +
@@ -118,110 +149,31 @@ plot_gsea_enrichment <- function(gsea_obj,
       strip.text.y.left  = ggplot2::element_text(angle = 0, size = 7, face = "bold")
     )
 
-  # ---- Panel 3: Ranked metric bar (same gene list for all sets) ----------
-  stat_df <- es_list[[1]] %>%
-    dplyr::mutate(fill = dplyr::if_else(.data$geneList >= 0, "pos", "neg"))
-  p_stat <- ggplot2::ggplot(stat_df,
-             ggplot2::aes(x = x, y = geneList, fill = fill)) +
-    ggplot2::geom_col(width = 1) +
-    ggplot2::scale_fill_manual(
-      values = c(pos = "#E64B35", neg = "#4DBBD5"), guide = "none") +
-    ggplot2::scale_x_continuous(expand = c(0, 0)) +
+  # ---- Panel 3: Ranked metric (same gene list for all sets) --------------
+  # Two filled areas (positive red / negative blue) rather than one geom_col bar
+  # per gene: identical appearance, two polygons instead of ~N rectangles, and
+  # no sub-pixel dropout where |metric| rounds below one device pixel.
+  stat_df <- es_list[[1]]
+  p_stat <- ggplot2::ggplot(stat_df, ggplot2::aes(x = x)) +
+    ggplot2::geom_area(ggplot2::aes(y = pmax(.data$geneList, 0)), fill = "#E64B35") +
+    ggplot2::geom_area(ggplot2::aes(y = pmin(.data$geneList, 0)), fill = "#4DBBD5") +
+    ggplot2::scale_x_continuous(expand = c(0, 0), limits = c(1, N)) +
     ggplot2::labs(x = "Gene Rank", y = "Ranked\nMetric") +
     pub_theme
 
   # ---- Assemble with patchwork -------------------------------------------
-  p_es / p_hits / p_stat +
-    patchwork::plot_layout(heights = c(5, n_sets * 0.65 + 0.3, 2))
+  # guides = "collect" gathers the single colour legend to one place instead of
+  # leaving it wedged between the ES curve and the hit-mark rows it annotates.
+  assembled <- p_es / p_hits / p_stat +
+    patchwork::plot_layout(heights = c(5, n_sets * 0.65 + 0.3, 2),
+                           guides = "collect")
+  if (n_sets > 1)
+    assembled <- assembled & ggplot2::theme(legend.position = "bottom")
+  assembled
 }
 
 # ---------------------------------------------------------------------------
-# .mets_nes_heatmap()  —  one-column NES heatmap (fill = NES, label = NES +
-# FDR stars) over all signatures for a single GSEA contrast. Signatures are
-# ordered top->bottom by `sig_order`; fill limits `lim` are shared across the
-# two contrasts so the colours are directly comparable.
+# NOTE: .mets_nes_heatmap() and build_mets_gsea_composite() moved to
+# modules/composites.R (the consolidated composite module). plot_gsea_enrichment()
+# above stays here — it is a run-time primitive used by modules/mets_de.R.
 # ---------------------------------------------------------------------------
-.mets_stars <- function(p) ifelse(is.na(p), "",
-  ifelse(p < 0.001, "***", ifelse(p < 0.01, "**", ifelse(p < 0.05, "*", ""))))
-
-.mets_nes_heatmap <- function(gsea_df, contrast_lab, pos_label, sig_order, lim) {
-  d <- gsea_df
-  d$Signature <- factor(d$ID, levels = rev(sig_order))
-  d$Contrast  <- contrast_lab
-  d$lab <- paste0(sprintf("%.2f", d$NES), .mets_stars(d$p.adjust))
-  ggplot2::ggplot(d, ggplot2::aes(x = Contrast, y = Signature, fill = NES)) +
-    ggplot2::geom_tile(colour = "white", linewidth = 0.6) +
-    ggplot2::geom_text(ggplot2::aes(label = lab), size = 3, fontface = "bold",
-                       colour = "grey10") +
-    ggplot2::scale_fill_gradient2(low = "#3B6EA5", mid = "white", high = "#E64B35",
-      midpoint = 0, limits = c(-lim, lim), name = "NES") +
-    ggplot2::labs(title = sprintf("NES + FDR (+NES = up in %s)", pos_label),
-                  x = NULL, y = NULL) +
-    pub_theme +
-    ggplot2::theme(legend.position = "right",
-                   panel.grid  = ggplot2::element_blank(),
-                   axis.ticks  = ggplot2::element_blank(),
-                   plot.title  = ggplot2::element_text(size = 11, face = "bold", hjust = 0))
-}
-
-# ---------------------------------------------------------------------------
-# build_mets_gsea_composite()
-#
-# Four-panel composite for the mets GSEA analysis (thesis mets figure):
-#   A  Normal-vs-Primary     all-signature enrichment plot
-#   B  Normal-vs-Primary     NES heatmap (fill = NES, label = NES + FDR stars)
-#   C  Primary-vs-Metastasis all-signature enrichment plot
-#   D  Primary-vs-Metastasis NES heatmap
-#
-# Rebuildable from a completed run: reads the two saved gseaResult objects
-# (results/gsea_{NormalVsPrimary,PrimaryVsMetastasis}.rds written by
-# run_mets_de). NES / FDR for the heatmaps come from as.data.frame(obj).
-# ---------------------------------------------------------------------------
-build_mets_gsea_composite <- function(mets_dir,
-                                      out_dir = file.path(mets_dir, "plots", "GSEA")) {
-  np_rds <- file.path(mets_dir, "results", "gsea_NormalVsPrimary.rds")
-  pm_rds <- file.path(mets_dir, "results", "gsea_PrimaryVsMetastasis.rds")
-  if (!file.exists(np_rds) || !file.exists(pm_rds))
-    stop("build_mets_gsea_composite(): missing gsea RDS in ",
-         file.path(mets_dir, "results"), " (run run_mets_de first).")
-  gsea_np <- readRDS(np_rds); gsea_pm <- readRDS(pm_rds)
-
-  df_np <- as.data.frame(gsea_np); df_pm <- as.data.frame(gsea_pm)
-  if (!nrow(df_np) || !nrow(df_pm))
-    stop("build_mets_gsea_composite(): empty GSEA result(s).")
-
-  # Shared signature order (top->bottom) = descending Primary-vs-Metastasis NES,
-  # the headline contrast; any signature absent there is appended.
-  ord       <- df_pm$ID[order(-df_pm$NES)]
-  sig_order <- c(ord, setdiff(union(df_np$ID, df_pm$ID), ord))
-  glim      <- max(abs(c(df_np$NES, df_pm$NES)), na.rm = TRUE)
-
-  A <- plot_gsea_enrichment(gsea_np, gene_set_ids = sig_order,
-         title = "Normal vs Primary: all signatures",
-         label_left = "Up in Normal", label_right = "Up in Primary")
-  B <- .mets_nes_heatmap(df_np, "N / P", pos_label = "Normal",     sig_order, glim)
-  C <- plot_gsea_enrichment(gsea_pm, gene_set_ids = sig_order,
-         title = "Primary vs Metastasis: all signatures",
-         label_left = "Up in Metastasis", label_right = "Up in Primary")
-  D <- .mets_nes_heatmap(df_pm, "P / M", pos_label = "Metastasis", sig_order, glim)
-
-  composite <- patchwork::wrap_plots(
-      patchwork::wrap_elements(A), patchwork::wrap_elements(B),
-      patchwork::wrap_elements(C), patchwork::wrap_elements(D),
-      ncol = 2, widths = c(3, 1)) +
-    patchwork::plot_annotation(
-      tag_levels = "A",
-      title = "Mets GSEA: signature enrichment across the Normal to Primary to Metastasis axis",
-      theme = ggplot2::theme(plot.title = ggplot2::element_text(face = "bold", size = 15))) &
-    ggplot2::theme(plot.tag = ggplot2::element_text(face = "bold", size = 16))
-
-  dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
-  n_sig <- length(sig_order); h <- max(14, 2 * (n_sig * 0.55 + 4))
-  ggplot2::ggsave(file.path(out_dir, "Fig_Mets_GSEA_composite.pdf"), composite,
-                  width = 16, height = h, limitsize = FALSE, device = grDevices::pdf)
-  ggplot2::ggsave(file.path(out_dir, "Fig_Mets_GSEA_composite.png"), composite,
-                  width = 16, height = h, dpi = 300, bg = "white", limitsize = FALSE)
-  message("  wrote Fig_Mets_GSEA_composite (", n_sig, " signatures, ",
-          round(h, 1), " in tall)")
-  invisible(composite)
-}
