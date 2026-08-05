@@ -686,6 +686,43 @@ if (!exists("MIN_COX_N")) MIN_COX_N <- 10
   na0(m)
 }
 
+# Score-across-subtype eps^2 heatmap (Kruskal-Wallis). Rows = core DTP scores,
+# column facets = CMS/PDS subtype axis, x within facet = Dataset (all cohorts in
+# `sss`, e.g. GSE39582 + TCGA-COAD); fill = eps^2, label = eps^2 (+ raw p / FDR q
+# when detailed). Reads the Subtype_Score_Stats rows the caller already loaded.
+# Shared by the §3.3 survival figure (standalone Fig3_3B) and Panel B of the
+# subtype-violin composite (build_subtype_violin_composite).
+.subtype_eps2_heatmap <- function(sss, detailed) {
+  .dplyr_local(environment())
+  pb <- sss %>% filter(Score %in% .CORE_SCORES, Subtype_Axis %in% c("CMS", "PDS")) %>%
+    mutate(Score = factor(.CORE_LABEL[Score], rev(unname(.CORE_LABEL))),
+           Axis  = factor(paste0(Subtype_Axis, " subtype"), c("CMS subtype", "PDS subtype")),
+           eps2  = suppressWarnings(as.numeric(Eps2)),
+           star  = .sig_stars(FDR_P, ""),
+           lab_clean = ifelse(star == "", sprintf("%.02f", eps2),
+                              paste0(sprintf("%.02f", eps2), " ", star)),
+           lab_full  = mapply(.stat_annot, detailed = TRUE, clean = lab_clean,
+                              effect = sprintf("eps2=%.2f", eps2),
+                              raw_p = suppressWarnings(as.numeric(Raw_P)), fdr = FDR_P))
+  pb$lab <- if (detailed) pb$lab_full else pb$lab_clean
+  ggplot(pb, aes(x = Dataset, y = Score, fill = eps2)) +
+    geom_tile(colour = "white", linewidth = 0.6) +
+    geom_text(aes(label = lab), size = if (detailed) 2.4 else 3.0, fontface = "bold",
+              colour = "grey10", lineheight = 0.82) +
+    facet_grid(. ~ Axis) +
+    scale_fill_gradient(low = "white", high = "#762A83", limits = c(0, NA),
+      name = expression(epsilon^2~"(effect size)"),
+      guide = guide_colourbar(barwidth = 9, barheight = 0.5, title.vjust = 1)) +
+    labs(title = "Does the DTP score itself differ across subtypes? (Kruskal-Wallis)",
+         subtitle = if (detailed)
+           "Epsilon-squared effect size across subtype levels; cells: eps2, raw p, FDR q (BH); * FDR<0.05."
+         else
+           "Epsilon-squared effect size across subtype levels; * = FDR<0.05 (BH).",
+         x = NULL, y = NULL) +
+    .base_theme + theme(axis.text.x = element_text(size = 9),
+                        panel.spacing.x = unit(6, "pt"))
+}
+
 build_subtype_survival_figures <- function(run_dir, out_dir) {
   message("[group 4] subtype/subgroup univariable survival (§3.3)")
   .dplyr_local(environment())
@@ -812,47 +849,17 @@ build_subtype_survival_figures <- function(run_dir, out_dir) {
                           panel.spacing.y = unit(4, "pt"))
   }
 
-  # ============= Panel B: score-across-subtype (Kruskal-Wallis eps^2) =============
-  pb <- sss %>% filter(Score %in% .CORE_SCORES, Subtype_Axis %in% c("CMS", "PDS")) %>%
-    mutate(Score = factor(.CORE_LABEL[Score], rev(unname(.CORE_LABEL))),
-           Axis  = factor(paste0(Subtype_Axis, " subtype"), c("CMS subtype", "PDS subtype")),
-           eps2  = suppressWarnings(as.numeric(Eps2)),
-           star  = .sig_stars(FDR_P, ""),
-           lab_clean = ifelse(star == "", sprintf("%.02f", eps2),
-                              paste0(sprintf("%.02f", eps2), " ", star)),
-           lab_full  = mapply(.stat_annot, detailed = TRUE, clean = lab_clean,
-                              effect = sprintf("eps2=%.2f", eps2),
-                              raw_p = suppressWarnings(as.numeric(Raw_P)), fdr = FDR_P))
-  make_B <- function(detailed) {
-    d <- pb; d$lab <- if (detailed) d$lab_full else d$lab_clean
-    ggplot(d, aes(x = Dataset, y = Score, fill = eps2)) +
-      geom_tile(colour = "white", linewidth = 0.6) +
-      geom_text(aes(label = lab), size = if (detailed) 2.4 else 3.0, fontface = "bold",
-                colour = "grey10", lineheight = 0.82) +
-      facet_grid(. ~ Axis) +
-      scale_fill_gradient(low = "white", high = "#762A83", limits = c(0, NA),
-        name = expression(epsilon^2~"(effect size)"),
-        guide = guide_colourbar(barwidth = 9, barheight = 0.5, title.vjust = 1)) +
-      labs(title = "Does the DTP score itself differ across subtypes? (Kruskal-Wallis)",
-           subtitle = if (detailed)
-             "Epsilon-squared effect size across subtype levels; cells: eps2, raw p, FDR q (BH); * FDR<0.05."
-           else
-             "Epsilon-squared effect size across subtype levels; * = FDR<0.05 (BH).",
-           x = NULL, y = NULL) +
-      .base_theme + theme(axis.text.x = element_text(size = 9),
-                          panel.spacing.x = unit(6, "pt"))
-  }
-
-  # ---- Save panels + composite ----
+  # ---- Save panels (standalone) ----
+  # Panel A = subgroup HR matrix (Fig3_3A). Panel B = score-across-subtype eps^2
+  # heatmap (Fig3_3B), built by the shared .subtype_eps2_heatmap() helper — that
+  # same heatmap is now Panel B of the subtype-violin composite
+  # (build_subtype_violin_composite). The former combined
+  # "Fig3_subtype_survival_composite" (A over B) was retired: Panel A already
+  # stands alone here as Fig3_3A, and the eps^2 heatmap now travels with the
+  # violins it summarises.
   n_sub <- nlevels(cells$ylab); a_h <- max(4.5, 0.32 * n_sub + 2.6)
   .save_fig(make_A(TRUE), "Fig3_3A_subgroup_hr_matrix", 8.8, a_h, out_dir)
-  .save_fig(make_B(TRUE), "Fig3_3B_score_across_subtype", 7.5, 3.2, out_dir)
-  mk <- function(a, b) wrap_elements(a) / wrap_elements(b) +
-    plot_layout(heights = c(a_h, 3.4)) + plot_annotation(tag_levels = "A") &
-    theme(plot.tag = element_text(face = "bold", size = 16))
-  .save_fig(mk(make_A(TRUE), make_B(TRUE)), "Fig3_subtype_survival_composite", 9.5, a_h + 3.9, out_dir)
-  .save_fig(mk(.strip_titles(make_A(FALSE)), .strip_titles(make_B(FALSE))),
-            "Fig3_subtype_survival_composite", 9.5, a_h + 3.9, file.path(out_dir, "publication"))
+  .save_fig(.subtype_eps2_heatmap(sss, TRUE), "Fig3_3B_score_across_subtype", 7.5, 3.2, out_dir)
 
   # ================================ Table 3.3 ================================
   rd2 <- function(x) round(x, 2); rd3 <- function(x) round(x, 3)
@@ -867,6 +874,127 @@ build_subtype_survival_figures <- function(run_dir, out_dir) {
             factor(Score, .CORE_SCORES), factor(Endpoint, metrics))
   readr::write_csv(tbl, file.path(out_dir, "Table_3_3_subtype_survival.csv"))
   message("  wrote Table_3_3_subtype_survival.csv (", nrow(tbl), " rows)")
+}
+
+# =============================================================================
+# GROUP 4b — Marisa subtype-score violins (thesis Section 3.3, companion to the
+#   Panel B eps^2 heatmap). A 3-row x 2-column grid: one DTP core score per row
+#   (DTP Up / Down / Composite), one subtype axis per column (CMS / PDS). Each
+#   cell is the per-sample ssGSEA score distribution across that axis's subtype
+#   levels for the Marisa (GSE39582) cohort only.
+#   CMS shows CMS1-4 (unclassified NA dropped); PDS shows PDS1-3 (Mixed dropped,
+#   matching the Cox convention). The annotated Kruskal-Wallis eps^2/FDR is read
+#   verbatim from Subtype_Score_Stats.csv (figures never recompute stats) — that
+#   saved PDS stat was computed over 4 groups incl. Mixed (N=585), flagged in the
+#   caption. Rebuildable from a completed run's GSE39582 CSVs alone.
+# =============================================================================
+.SUBTYPE_LEVELS <- list(CMS = c("CMS1", "CMS2", "CMS3", "CMS4"),
+                        PDS = c("PDS1", "PDS2", "PDS3"))
+
+build_subtype_violin_composite <- function(run_dir, out_dir) {
+  message("[group 4b] Marisa subtype-score violins (Section 3.3)")
+  .dplyr_local(environment())
+
+  clin <- .rd(run_dir, "GSE39582_clinical.csv")
+  sss  <- .rd(run_dir, "Subtype_Score_Stats.csv")
+  axes <- names(.SUBTYPE_LEVELS)                    # CMS, PDS (column order)
+  miss <- setdiff(c(.CORE_SCORES, axes), names(clin))
+  if (length(miss))
+    stop("GSE39582_clinical.csv missing column(s): ", paste(miss, collapse = ", "))
+
+  # KW eps^2 / raw p / FDR for one (axis, score) on the Marisa cohort; NA-safe.
+  sss_g <- sss[sss$Dataset == "GSE39582", , drop = FALSE]
+  kw <- function(axis, score) {
+    r <- sss_g[sss_g$Subtype_Axis == axis & sss_g$Score == score, ]
+    if (!nrow(r)) return(list(eps2 = NA_real_, raw = NA_real_, fdr = NA_real_))
+    list(eps2 = suppressWarnings(as.numeric(r$Eps2[1])),
+         raw  = suppressWarnings(as.numeric(r$Raw_P[1])),
+         fdr  = suppressWarnings(as.numeric(r$FDR_P[1])))
+  }
+  AXIS_LAB <- c(CMS = "CMS subtype", PDS = "PDS subtype")
+
+  # Shared y-range per signature row (CMS and PDS partition the same patients, so
+  # a common window makes the two columns directly comparable). coord_cartesian
+  # zooms without dropping points, so the violin densities stay honest.
+  row_ylim <- function(score) {
+    v <- suppressWarnings(as.numeric(clin[[score]])); v <- v[!is.na(v)]
+    rng <- range(v); pad <- diff(rng) * 0.04
+    c(rng[1] - pad, rng[2] + pad)
+  }
+
+  # One violin cell. Column header (top row only) is a plot.title so it is
+  # dropped by .strip_titles for the publication copy — the CMS1-4 / PDS1-3 x
+  # ticks self-identify the column; the row identity is the left-column y-axis
+  # title, which survives stripping.
+  make_cell <- function(score, axis, detailed, ylim) {
+    lv <- .SUBTYPE_LEVELS[[axis]]
+    d  <- clin[clin[[axis]] %in% lv, c(axis, score)]
+    d[[score]] <- suppressWarnings(as.numeric(d[[score]]))
+    d  <- d[!is.na(d[[score]]), , drop = FALSE]
+    d[[axis]] <- factor(d[[axis]], levels = lv)
+    tb   <- table(d[[axis]])
+    lbls <- setNames(paste0(names(tb), "\n(n=", as.integer(tb), ")"), names(tb))
+
+    k   <- kw(axis, score)
+    sub <- if (detailed)
+             .stat_annot(TRUE,
+                         effect = if (is.na(k$eps2)) NULL else sprintf("KW eps2=%.2f", k$eps2),
+                         raw_p = k$raw, fdr = k$fdr, sep = "  |  ")
+           else NULL
+
+    ggplot(d, aes(x = .data[[axis]], y = .data[[score]], fill = .data[[axis]])) +
+      geom_violin(alpha = 0.8, trim = FALSE, scale = "width",
+                  linewidth = 0.3, colour = "grey30") +
+      geom_boxplot(width = 0.15, fill = "white", alpha = 0.9,
+                   outlier.shape = NA, linewidth = 0.3) +
+      scale_fill_brewer(palette = "Set2") +
+      scale_x_discrete(labels = lbls) +
+      coord_cartesian(ylim = ylim) +
+      labs(title    = if (score == .CORE_SCORES[[1]]) AXIS_LAB[[axis]] else NULL,
+           subtitle = sub, x = NULL,
+           y = if (axis == axes[[1]]) paste0(.CORE_LABEL[[score]], " ssGSEA") else NULL) +
+      .base_theme +
+      theme(legend.position = "none",
+            plot.title    = element_text(face = "bold", size = 12, hjust = 0.5),
+            plot.subtitle = element_text(size = 8.5, colour = "grey30", hjust = 0.5),
+            axis.text.x   = element_text(size = 8, lineheight = 0.85))
+  }
+
+  # Panel A: the 3x2 violin grid (a patchwork of the 6 cells).
+  make_violin_grid <- function(detailed) {
+    cells <- list()
+    for (sc in .CORE_SCORES) {
+      yl <- row_ylim(sc)
+      for (ax in axes) cells[[length(cells) + 1]] <- make_cell(sc, ax, detailed, yl)
+    }
+    wrap_plots(cells, ncol = 2, byrow = TRUE)
+  }
+
+  # A (score-across-subtype eps^2 heatmap, all cohorts — GSE39582 + TCGA-COAD —
+  # via the shared .subtype_eps2_heatmap helper) over B (Marisa violins). Panels
+  # are stripped before wrap_elements() for the publication copy; the A/B tags are
+  # added at the outer composite so they survive stripping.
+  make_composite <- function(detailed) {
+    heat    <- .subtype_eps2_heatmap(sss, detailed)
+    violins <- make_violin_grid(detailed)
+    if (!detailed) { heat <- .strip_titles(heat); violins <- .strip_titles(violins) }
+    wrap_elements(heat) / wrap_elements(violins) +
+      plot_layout(heights = c(1.1, 3)) +
+      plot_annotation(
+        tag_levels = "A",
+        title   = if (detailed)
+          "DTP signature scores across molecular subtypes: Marisa (GSE39582)" else NULL,
+        caption = if (detailed) paste0(
+          "(A) Kruskal-Wallis eps2 of each DTP score across subtype levels, GSE39582 and TCGA-COAD.\n",
+          "(B) ssGSEA score by subtype for Marisa (violin = width-scaled; box = median/IQR); n per group on the x-axis.\n",
+          "PDS \"Mixed\" is excluded from the violins; the Kruskal-Wallis eps2 in (A) was computed over all PDS groups incl. Mixed (N=585).") else NULL,
+        theme = theme(plot.title   = element_text(face = "bold", size = 15, hjust = 0),
+                      plot.caption = element_text(size = 8, colour = "grey30", hjust = 0),
+                      plot.tag     = element_text(face = "bold", size = 16)))
+  }
+
+  .save_fig(make_composite(TRUE),  "Fig3_3C_marisa_subtype_violins", 10, 14, out_dir)
+  .save_fig(make_composite(FALSE), "Fig3_3C_marisa_subtype_violins", 10, 14, file.path(out_dir, "publication"))
 }
 
 # =============================================================================
@@ -1011,6 +1139,7 @@ build_crc_composites <- function(run_dir, out_dir = file.path(run_dir, "composit
                  "2 (KM)"              = build_km_figures,
                  "3 (subgroups)"       = build_subgroup_figures,
                  "4 (subtype survival)" = build_subtype_survival_figures,
+                 "4b (subtype violins)" = build_subtype_violin_composite,
                  "5 (confounding)"     = build_confounding_figure)
   status <- setNames(logical(length(groups)), names(groups))
   for (nm in names(groups)) {
