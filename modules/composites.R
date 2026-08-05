@@ -859,6 +859,8 @@ build_subtype_survival_figures <- function(run_dir, out_dir) {
   # violins it summarises.
   n_sub <- nlevels(cells$ylab); a_h <- max(4.5, 0.32 * n_sub + 2.6)
   .save_fig(make_A(TRUE), "Fig3_3A_subgroup_hr_matrix", 8.8, a_h, out_dir)
+  .save_fig(.strip_titles(make_A(FALSE)), "Fig3_3A_subgroup_hr_matrix", 8.8, a_h,
+            file.path(out_dir, "publication"))
   .save_fig(.subtype_eps2_heatmap(sss, TRUE), "Fig3_3B_score_across_subtype", 7.5, 3.2, out_dir)
 
   # ================================ Table 3.3 ================================
@@ -942,7 +944,7 @@ build_subtype_violin_composite <- function(run_dir, out_dir) {
                          raw_p = k$raw, fdr = k$fdr, sep = "  |  ")
            else NULL
 
-    ggplot(d, aes(x = .data[[axis]], y = .data[[score]], fill = .data[[axis]])) +
+    p <- ggplot(d, aes(x = .data[[axis]], y = .data[[score]], fill = .data[[axis]])) +
       geom_violin(alpha = 0.8, trim = FALSE, scale = "width",
                   linewidth = 0.3, colour = "grey30") +
       geom_boxplot(width = 0.15, fill = "white", alpha = 0.9,
@@ -958,6 +960,16 @@ build_subtype_violin_composite <- function(run_dir, out_dir) {
             plot.title    = element_text(face = "bold", size = 12, hjust = 0.5),
             plot.subtitle = element_text(size = 8.5, colour = "grey30", hjust = 0.5),
             axis.text.x   = element_text(size = 8, lineheight = 0.85))
+
+    # Per-panel Kruskal-Wallis significance (BH-FDR) as an annotation layer so it
+    # survives .strip_titles() in the publication copy — which loses the eps2/FDR
+    # subtitle carried by the detailed copy. Only added there (detailed already
+    # states it in the subtitle). Stars for FDR<0.05, "n.s." otherwise.
+    star_lab <- .sig_stars(k$fdr, "n.s.")
+    if (!detailed && nzchar(star_lab))
+      p <- p + annotate("text", x = -Inf, y = Inf, hjust = -0.6, vjust = 1.5,
+                        label = star_lab, size = 5, fontface = "bold", colour = "grey20")
+    p
   }
 
   # Panel A: the 3x2 violin grid (a patchwork of the 6 cells).
