@@ -1,0 +1,10 @@
+Figure 7. Pooled pan-cancer DTP-score association by 3-year outcome (Section 3.5).
+
+Batch-corrected ssGSEA scores (limma::removeBatchEffect with cancer type as batch, recomputed from the master
+exactly as the aggregate) for all 25 solid-tumour TCGA cohorts pooled, shown as violins split by 3-year
+outcome group -- no event vs event (died for OS; recurred for RFS). Six panels: the DTP Up, Down and Composite
+scores (rows) by overall survival and recurrence (columns). Each panel is annotated with the Pan-Cancer
+Wilcoxon rank-biserial effect size r and its Benjamini-Hochberg FDR; a NEGATIVE r means a higher score in the
+event group. Up OS r = -0.079 (FDR < 0.001), Up RFS -0.052 (0.003), Down OS -0.059 (< 0.001), Down RFS -0.005
+(0.776, n.s.), Composite OS -0.031 (0.041), Composite RFS -0.047 (0.006). Violin widths are scaled equal so the
+unequal group sizes (annotated as n) are comparable.

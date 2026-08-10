@@ -137,7 +137,10 @@ run_crc_survival <- function(out_root, panel, crc_signatures = NULL) {
                                   sample.type   = "Primary Tumor")
   # Two-level cache: SE (large) -> TPM matrix + colData (small).
   # colData is cached separately because MSI status is read from it downstream.
-  mat_tcga <- cache_rds("TCGA_COAD_tpm", function() {
+  # colData is cached separately because MSI status is read from it downstream.
+  # ID_TYPE is part of the TPM key: prep_tcga_tpm() bakes ID_TYPE into rownames,
+  # so a plain key would return the wrong gene-ID namespace after switching ID_TYPE.
+  mat_tcga <- cache_rds(paste0("TCGA_COAD_tpm_", ID_TYPE), function() {
     se <- cache_rds("TCGA_COAD_se", function() {
       TCGAbiolinks::GDCdownload(query); TCGAbiolinks::GDCprepare(query)
     })
@@ -148,7 +151,8 @@ run_crc_survival <- function(out_root, panel, crc_signatures = NULL) {
     m
   })
   coad_coldata <- cache_rds("TCGA_COAD_coldata", function() {
-    stop("colData cache missing — delete TCGA_COAD_tpm.rds and rerun to rebuild.")
+    stop("colData cache missing — delete TCGA_COAD_tpm_", ID_TYPE,
+         ".rds and rerun to rebuild.")
   })
 
   scores_tcga <- run_ssgsea(mat_tcga, gs) %>%
@@ -190,7 +194,8 @@ run_crc_survival <- function(out_root, panel, crc_signatures = NULL) {
 
   # --- Molecular subtyping (CMS + PDS), symbol-keyed, on the same SE ----------
   se_coad <- cache_rds("TCGA_COAD_se", function()
-    stop("SE cache missing — delete TCGA_COAD_tpm.rds and rerun to rebuild."))
+    stop("SE cache missing — delete TCGA_COAD_tpm_", ID_TYPE,
+         ".rds and rerun to rebuild."))
   emat_tcga_sym <- build_symbol_matrix(se_coad, "tcga")
   rm(se_coad); gc()
   cms_tcga <- cache_rds("cms_tcga", function() call_cms(emat_tcga_sym))

@@ -1,0 +1,18 @@
+Figure 6. Per-cohort DTP-score survival association across the pan-cancer TCGA cohort (Section 3.5).
+Three stacked per-cohort forests, one per DTP score, on a shared cohort order.
+
+(A) DTP Up, (B) DTP Composite, (C) DTP Down. Each panel is a forest of the univariable continuous-score Cox
+hazard ratio per 1 standard deviation of that score within each of 25 solid-tumour TCGA cohorts, with 95%
+confidence interval on a log scale (truncated to [0.1, 10]), faceted by endpoint: overall survival (OS) and
+recurrence (RFS, DFS-based from the TCGA-CDR disease-free interval). Red = HR > 1 (higher score, higher
+hazard), blue = HR < 1; an asterisk marks FDR < 0.05; a grey "n/t" marks a cohort that failed the Cox gate
+(n >= 10 and >= 5 events; only TCGA-TGCT OS). All three panels share the SAME row order -- ascending DTP Up
+overall-survival per-SD HR -- so the tissues line up; TCGA-COAD (the colorectal tissue) is highlighted in each.
+Composite is FDR-significant in seven cohort-endpoints (TCGA-KIRP OS and RFS, TCGA-GBM RFS, TCGA-LGG OS and
+RFS, TCGA-PAAD OS and RFS) and Down in two (TCGA-LUAD OS, TCGA-CESC RFS) -- partly different tissues from Up.
+
+Hazard ratios are per 1 SD; the raw Cox HRs are per unit of the (log2) ssGSEA score and are not shown. FDR is
+Benjamini-Hochberg within each family (per-cohort vs. batch-corrected aggregate) and test, pooling OS and RFS.
+The pooled association is shown as violins in Figure 7; the batch-corrected aggregate Cox forest is an appendix
+figure (Fig_Pancan_aggregate_forest). Full per-cohort and aggregate statistics are in Appendix Table A4
+(Table_3_5_pancan_survival.csv).

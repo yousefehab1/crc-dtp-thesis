@@ -44,13 +44,14 @@ source("core/clinical.R")
 source("core/stats.R")
 source("core/plotting.R")
 source("core/subtyping.R")       # depends on expression.R, scoring.R, io.R
-source("core/gsea_plots.R")      # depends on pub_theme (plotting.R)
-source("core/composite_figures.R")  # publication composites; called by crc_survival
+source("core/gsea_plots.R")      # plot_gsea_enrichment primitive (used by mets_de)
 
 # ---- Source modules ---------------------------------------------------------
 source("modules/crc_survival.R")
 source("modules/pancan_survival.R")
 source("modules/mets_de.R")
+source("modules/composites.R")   # standalone composite/publication figures (all modules)
+source("modules/pancan_treated.R")  # standalone pan-cancer treated-only section (§3.5-treated)
 
 # ---- Which signatures each analysis uses (#1) -------------------------------
 # Edit these to point at the relevant sig.csv columns.
@@ -66,6 +67,23 @@ panel    <- unify_panel_ids(load_signature_panel(SIG_FILE))   # convert to ID_TY
 run_crc_survival(out_root, panel, crc_signatures = CRC_SIGNATURES)
 run_pancan_survival(out_root, panel, up_name = PANCAN_UP, down_name = PANCAN_DOWN)
 run_mets_de(out_root, panel, core_signature = METS_CORE_SIG)
+
+# ---- Composite + publication figures (standalone module) --------------------
+# Regenerates every composite for whichever analysis modules produced output in
+# this run. Decoupled from the analysis modules — also runnable on its own via
+# run_composites(out_root) or  Rscript modules/composites.R [OUT_ROOT].
+run_composites(out_root)
+
+# ---- Pan-cancer treated-only section (standalone add-on) --------------------
+# Reuses this run's scored pan-cancer master; pulls TCGA treatment status
+# (pharmaceutical or radiation; GDCquery_clinic, cached) and re-runs stats/forests
+# on the treated subset.
+# Guarded so a clinical-pull/network failure never sinks the run. Also runnable on
+# its own via run_pancan_treated(out_root) or  Rscript modules/pancan_treated.R [ROOT].
+tryCatch(run_pancan_treated(out_root), error = function(e) {
+  msg <- paste0("[pancan treated] section FAILED: ", conditionMessage(e))
+  message(msg); warning(msg, call. = FALSE)
+})
 
 finalize_run(out_root)
 message("\nAll modules finished. Outputs in: ", out_root)

@@ -4,6 +4,11 @@ cache/
 
 # ── Pipeline output runs ───────────────────────────────────────────────────────
 CRC_DTP_*/
+CRC_Dipci_*/
+archive/
+
+# ── Thesis writing (large binaries; the .md drafts stay tracked) ───────────────
+*.docx
 
 # ── Large intermediate R objects ───────────────────────────────────────────────
 *.rds
@@ -23,5 +28,7 @@ CRC_DTP_*/
 
 # ── Misc ──────────────────────────────────────────────────────────────────────
 MANIFEST.txt
+Rplots.pdf
+~$*
 .Rapp.history
 **/.Rapp.history

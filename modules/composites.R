@@ -43,9 +43,10 @@ suppressPackageStartupMessages({
 # PART 1 — CRC-survival composites (build_crc_composites, 5 groups)
 # ==============================================================================
 # ---- Shared constants --------------------------------------------------------
-MIN_KM_GROUP_N <- 5      # per High/Low group (matches core/config.R)
-MIN_EVENTS     <- 5
-X_CAP          <- 36     # months (3-yr landmark truncation)
+# MIN_KM_GROUP_N / MIN_EVENTS live in core/config.R (sourced before this file in
+# main.R and in the standalone entry at the bottom); referenced only inside
+# function bodies, never at top-level parse time.
+X_CAP          <- 36     # months (follow-up truncated/administratively censored at 36 mo)
 FOREST_XLIM    <- c(0.1, 10)   # subgroup HR display window (log scale)
 
 # Curated label + row-order dictionary for KNOWN signatures (groups 1 & 2).
@@ -54,15 +55,18 @@ FOREST_XLIM    <- c(0.1, 10)   # subgroup HR display window (log scale)
 # actually present in the run and labels any newcomer by its column name. Listing
 # a signature here just gives it a nicer label and a fixed position; order below
 # is the row order (inverse-signal modules DTP Down / MYC / Columnar grouped last).
+# Keys MUST be the score columns the run actually writes ("<Signature>_ssGSEA",
+# one per column of SIG_FILE); a key that matches nothing silently demotes that
+# signature to the "novel" bucket (raw label, appended last).
 MODULES <- c(
   Up_ssGSEA          = "DTP Up",
   Composite_ssGSEA   = "DTP Composite",
-  Foetal_ssGSEA      = "Foetal intestinal",
-  regStemCell_ssGSEA = "Regenerative stem cell",
-  revCSC_ssGSEA      = "Revival revCSC",
+  Fetal_ssGSEA       = "Foetal intestinal",
+  RSC_ssGSEA         = "Regenerative stem cell",
+  revSC_ssGSEA       = "Revival revCSC",
   IBD_ssGSEA         = "IBD",
   Down_ssGSEA        = "DTP Down",
-  Myc_ssGSEA         = "MYC module",
+  MYC_ssGSEA         = "MYC module",
   CSC_ssGSEA         = "Columnar stem cell"
 )
 
@@ -102,8 +106,27 @@ MODULES <- c(
   if (!length(cand)) stop("No CRC_DTP_*/crc_survival directory found; pass RUN_DIR explicitly.")
   cand[[1]]
 }
-.rd <- function(run_dir, f) read.csv(file.path(run_dir, f), check.names = FALSE,
-                                     stringsAsFactors = FALSE)
+# Memoized CSV reader: repeated (.rd(run_dir, f)) calls in one session return a
+# copy of the cached data.frame instead of re-reading from disk. Keyed by full
+# path. Always return a row-slice copy so callers cannot mutate the cache entry.
+.rd <- local({
+  .cache <- new.env(parent = emptyenv())
+  function(run_dir, f) {
+    key <- file.path(run_dir, f)
+    if (!exists(key, envir = .cache, inherits = FALSE))
+      .cache[[key]] <- read.csv(key, check.names = FALSE, stringsAsFactors = FALSE)
+    .cache[[key]][TRUE, , drop = FALSE]
+  }
+})
+# Within-subset score SD for rescaling continuous Cox unit-change HRs to
+# per-1-SD HRs via exp(log(HR) * sd). `x` is the score vector already restricted
+# to the analysis rows (e.g. non-NA score / time / event inside a subgroup).
+.score_sd <- function(x) {
+  x <- suppressWarnings(as.numeric(x))
+  x <- x[!is.na(x)]
+  if (length(x) < 2L) return(NA_real_)
+  stats::sd(x)
+}
 # .sig_stars(), .save_fig(), .png_dev, .strip_titles(), .base_theme, and the
 # canonical DATASET_FULL / DATASET_SHORT / ENDPOINT_LABEL maps live in
 # core/plotting.R (sourced first) so this file, core/gsea_plots.R and
@@ -315,8 +338,7 @@ build_km_figures <- function(run_dir, out_dir, km_modules = "all") {
   CONTRASTS$col_lab <- paste0(CONTRASTS$cohort, "\n(", ENDPOINT_LABEL[CONTRASTS$metric], ")")
   col_lab_map <- setNames(CONTRASTS$col_lab, CONTRASTS$key)
 
-  metric_cols <- function(m) if (m == "OS") c(t = "OS3Y_delay", e = "OS3Y_event")
-                             else            c(t = "RFS3Y_delay", e = "RFS3Y_event")
+  # metric_cols() is the canonical helper in core/stats.R (sourced before this file).
   clin  <- list(gse = .rd(run_dir, "GSE39582_clinical.csv"),
                 tcga = .rd(run_dir, "TCGA_COAD_clinical.csv"))
   stats <- .rd(run_dir, "CRC_Statistical_Summary.csv")
@@ -361,7 +383,7 @@ build_km_figures <- function(run_dir, out_dir, km_modules = "all") {
       tb <- table(d$Group)
       drawable <- length(tb) == 2 && all(tb >= MIN_KM_GROUP_N) && sum(d$event) >= MIN_EVENTS
       cx <- cox_stat(row, sc); lr <- logrank_stat(row, sc)
-      hr_sd <- if (cx$testable && is.finite(cx$hr_unit)) exp(log(cx$hr_unit) * stats::sd(score)) else NA_real_
+      hr_sd <- if (cx$testable && is.finite(cx$hr_unit)) exp(log(cx$hr_unit) * .score_sd(score)) else NA_real_
       cell_rows[[length(cell_rows) + 1]] <- tibble(
         key = row$key, module = MOD$labels[[sc]], score_col = sc, testable = cx$testable,
         hr = hr_sd, log2hr = log2(hr_sd), fdr = cx$fdr, raw = cx$raw, sig = cx$sig,
@@ -402,9 +424,9 @@ build_km_figures <- function(run_dir, out_dir, km_modules = "all") {
       scale_x_discrete(labels = col_lab_map) +
       labs(title = "Survival association of DTP-module scores across cohorts",
            subtitle = if (detailed)
-             "Univariable continuous-score Cox PH, landmark 36 mo. Cells: per-SD HR, raw p, FDR q (BH); * FDR<0.05."
+             "Univariable continuous-score Cox PH, follow-up truncated at 36 mo. Cells: per-SD HR, raw p, FDR q (BH); * FDR<0.05."
            else
-             "Univariable continuous-score Cox PH, landmark 36 mo.  Colour = log2 HR per 1 SD (red = higher score worse).  * = FDR<0.05 (BH).",
+             "Univariable continuous-score Cox PH, follow-up truncated at 36 mo.  Colour = log2 HR per 1 SD (red = higher score worse).  * = FDR<0.05 (BH).",
            x = NULL, y = NULL) +
       .base_theme + theme(axis.text.x = element_text(size = 8, lineheight = 0.85),
                           panel.spacing.x = unit(6, "pt"))
@@ -441,7 +463,7 @@ build_km_figures <- function(run_dir, out_dir, km_modules = "all") {
         labels = c(Low = "Low (< median)", High = "High (> median)")) +
       scale_x_continuous(limits = c(0, X_CAP), breaks = c(0, 12, 24, 36), expand = expansion(mult = c(0, 0.02))) +
       scale_y_continuous(limits = c(0, 1), labels = percent_format(accuracy = 1), expand = expansion(mult = c(0, 0.02))) +
-      labs(title = title, x = "Months from 36-mo landmark", y = if (show_y) "Survival probability" else NULL) +
+      labs(title = title, x = "Months from diagnosis (follow-up truncated at 36)", y = if (show_y) "Survival probability" else NULL) +
       .base_theme +
       theme(plot.title = element_text(face = "bold", size = 11, hjust = 0.5),
             strip.placement = "outside",
@@ -459,9 +481,9 @@ build_km_figures <- function(run_dir, out_dir, km_modules = "all") {
         title = if (identical(km_modules, "all")) "Kaplan-Meier survival by signature score (median High/Low split)"
                 else "Kaplan-Meier survival by score, outcome-associated modules",
         subtitle = if (detailed)
-          "Median High/Low split; curves annotated with log-rank raw p and BH-FDR q. Continuous-Cox per-SD HR effect sizes are in the matrix panel. 3-yr landmark, x capped 36 mo."
+          "Median High/Low split; curves annotated with log-rank raw p and BH-FDR q. Continuous-Cox per-SD HR effect sizes are in the matrix panel. Time runs from diagnosis with follow-up truncated at 36 mo (NOT a 3-yr landmark)."
         else
-          "Median High/Low split; log-rank BH-FDR significance shown as stars (* <0.05, ** <0.01, *** <0.001; n.s. = not significant). Continuous-Cox HR effect sizes are in the matrix panel. 3-yr landmark, x capped 36 mo.",
+          "Median High/Low split; log-rank BH-FDR significance shown as stars (* <0.05, ** <0.01, *** <0.001; n.s. = not significant). Continuous-Cox HR effect sizes are in the matrix panel. Time runs from diagnosis with follow-up truncated at 36 mo (NOT a 3-yr landmark).",
         theme = theme(plot.title = element_text(face = "bold", size = 14, hjust = 0),
                       plot.subtitle = element_text(size = 10, colour = "grey30", hjust = 0))) &
       theme(legend.position = "bottom")
@@ -502,28 +524,55 @@ build_subgroup_figures <- function(run_dir, out_dir, primary_score = "Up_ssGSEA"
   inter <- .rd(run_dir, "Interaction_Cox_Summary.csv")
   clin  <- list(GSE39582 = .rd(run_dir, "GSE39582_clinical.csv"),
                 "TCGA-COAD" = .rd(run_dir, "TCGA_COAD_clinical.csv"))
+  # Harmonised modifier columns (CMS / PDS / Stage_bin / MSI_group) rebuilt with the
+  # SAME rule the analysis module used, so sd_of() can restrict to the subgroup Level.
+  clin$GSE39582       <- harmonize_crc_modifiers(clin$GSE39582, "GSE39582")
+  clin[["TCGA-COAD"]] <- harmonize_crc_modifiers(clin[["TCGA-COAD"]], "TCGA-COAD")
   # Treated-Marisa subset so sd_of() rescales the treated columns on the treated SD.
   clin[["GSE39582 (treated)"]] <- clin$GSE39582[which(clin$GSE39582$Chemo_adj == "Y"), , drop = FALSE]
   metric_evt <- c(OS = "OS3Y_event", RFS = "RFS3Y_event")
-  sd_of <- function(ds, metric, score) {
-    d <- clin[[ds]]; ev <- metric_evt[[metric]]
-    if (!all(c(score, ev) %in% names(d))) return(NA_real_)
-    v <- suppressWarnings(as.numeric(d[[score]])); ok <- !is.na(v) & !is.na(d[[ev]])
-    stats::sd(v[ok])
+  metric_tim <- c(OS = "OS3Y_delay", RFS = "RFS3Y_delay")
+  # WITHIN-SUBGROUP score SD, over the same rows the subgroup Cox modelled (non-NA
+  # score + time + event inside that modifier Level). The HR being rescaled is the
+  # score effect INSIDE the level, so 1 SD must be that level's SD — using the
+  # cohort-wide SD would print a different "HR per 1 SD" than the §3.3 figure/table
+  # (build_subtype_survival_figures) report for the identical Cox fit.
+  # Core SD of the filtered score vector is .score_sd() (file-local helper above).
+  sd_of <- function(ds, metric, score, modifier, level) {
+    d <- clin[[ds]]; ev <- metric_evt[[metric]]; tm <- metric_tim[[metric]]
+    if (!all(c(score, ev, tm, modifier) %in% names(d))) return(NA_real_)
+    d <- d[which(as.character(d[[modifier]]) == level), , drop = FALSE]
+    v <- suppressWarnings(as.numeric(d[[score]]))
+    ok <- !is.na(v) & !is.na(d[[tm]]) & !is.na(d[[ev]])
+    .score_sd(v[ok])
   }
 
   subg <- subg %>%
     mutate(ckey = paste0(unname(DS_PREFIX[Dataset]), "_", Metric),
-           sd_sc = mapply(sd_of, Dataset, Metric, Score),
+           # Modifier/Level are still character here (factored further down).
+           sd_sc = mapply(sd_of, Dataset, Metric, Score, Modifier, Level),
            hr_sd = exp(log(HR) * sd_sc), lo_sd = exp(log(HR_lower) * sd_sc), hi_sd = exp(log(HR_upper) * sd_sc),
            Modifier = factor(Modifier, MOD_LEVELS), Level = factor(Level, LEVEL_ORDER),
            ckey = factor(ckey, COLS$ckey),
-           offscale = hr_sd < FOREST_XLIM[1] | hr_sd > FOREST_XLIM[2],
-           hr_d = squish(hr_sd, FOREST_XLIM), lo_d = squish(lo_sd, FOREST_XLIM), hi_d = squish(hi_sd, FOREST_XLIM),
+           # Non-convergent / failed Cox: non-finite per-SD point or CI bounds.
+           # (Pure NA = missing/not modelled — not flagged here.) Do not squish these
+           # to FOREST_XLIM boundaries as if they were real off-scale effects.
+           nonconv = (!is.na(hr_sd) & !is.finite(hr_sd)) |
+                     (!is.na(lo_sd) & !is.finite(lo_sd)) |
+                     (!is.na(hi_sd) & !is.finite(hi_sd)),
+           offscale = !nonconv & !is.na(hr_sd) &
+                      (hr_sd < FOREST_XLIM[1] | hr_sd > FOREST_XLIM[2]),
+           hr_d = ifelse(nonconv, NA_real_, squish(hr_sd, FOREST_XLIM)),
+           lo_d = ifelse(nonconv, NA_real_, squish(lo_sd, FOREST_XLIM)),
+           hi_d = ifelse(nonconv, NA_real_, squish(hi_sd, FOREST_XLIM)),
            # Per-row left-edge label: n / e (clean) plus the per-SD HR + CI (full).
            ne_clean = sprintf("n=%d, e=%d", as.integer(N), as.integer(N_events)),
-           ne_full  = ifelse(is.na(hr_sd), ne_clean,
+           ne_full  = ifelse(is.na(hr_sd) | nonconv, ne_clean,
                              sprintf("%s\nHR=%.2f [%.2f-%.2f]", ne_clean, hr_sd, lo_sd, hi_sd)))
+  if (any(subg$nonconv))
+    message(sprintf(paste0("[group 3] excluding %d non-convergent Cox row(s) from ",
+                           "forest display (non-finite per-SD HR or CI; not squished ",
+                           "to axis boundary)"), sum(subg$nonconv)))
   inter <- inter %>%
     mutate(ckey = paste0(unname(DS_PREFIX[Dataset]), "_", Metric),
            Modifier = factor(Modifier, MOD_LEVELS), ckey = factor(ckey, COLS$ckey),
@@ -560,9 +609,9 @@ build_subgroup_figures <- function(run_dir, out_dir, primary_score = "Up_ssGSEA"
       scale_x_discrete(labels = col_lab_map) +
       labs(title = "Effect modification of the DTP signature (score-by-subgroup interaction)",
            subtitle = if (detailed)
-             "LRT of score*modifier vs score+modifier (landmark Cox). Cells: raw p, FDR q (BH); * FDR<0.05. Colour = -log10 FDR."
+             "LRT of score*modifier vs score+modifier (Cox, follow-up truncated at 36 mo). Cells: raw p, FDR q (BH); * FDR<0.05. Colour = -log10 FDR."
            else
-             "Likelihood-ratio test of score*modifier vs score+modifier (landmark Cox).  * marks FDR-significant (BH, p<0.05).",
+             "Likelihood-ratio test of score*modifier vs score+modifier (Cox, follow-up truncated at 36 mo).  * marks FDR-significant (BH, p<0.05).",
            x = NULL, y = NULL) +
       .base_theme + theme(axis.text.x = element_text(size = 8, lineheight = 0.85),
                           panel.spacing.x = unit(6, "pt"))
@@ -570,7 +619,8 @@ build_subgroup_figures <- function(run_dir, out_dir, primary_score = "Up_ssGSEA"
 
   # -- Fig 3B: per-score forests --
   build_forest <- function(score_col, detailed) {
-    ds <- subg  %>% filter(Score == score_col)
+    # Drop non-convergent rows so they are not drawn at a fabricated boundary.
+    ds <- subg  %>% filter(Score == score_col, !nonconv)
     di <- inter %>% filter(Score == score_col)
     ds$dir     <- ifelse(ds$hr_sd > 1, "Higher hazard (HR>1)", "Lower hazard (HR<1)")
     ds$ne_lab  <- if (detailed) ds$ne_full else ds$ne_clean   # +per-row HR/CI when detailed
@@ -738,17 +788,16 @@ build_subtype_survival_figures <- function(run_dir, out_dir) {
 
   clin  <- list(GSE39582 = .rd(run_dir, "GSE39582_clinical.csv"),
                 "TCGA-COAD" = .rd(run_dir, "TCGA_COAD_clinical.csv"))
-  metric_cols <- function(m) if (m == "OS") c(t = "OS3Y_delay", e = "OS3Y_event")
-                             else            c(t = "RFS3Y_delay", e = "RFS3Y_event")
+  # metric_cols() is the canonical helper in core/stats.R (sourced before this file).
   # Within-subgroup score SD (non-NA score/time/event), computed once per member set.
+  # Core SD of the filtered score vector is .score_sd() (file-local helper above).
   sd_of <- function(ds, project, score, metric) {
     d <- clin[[ds]]; mc <- metric_cols(metric)
     if (!all(c(score, mc[["t"]], mc[["e"]]) %in% names(d))) return(NA_real_)
     mem <- .subgroup_members(d, project, ds); d <- d[mem, , drop = FALSE]
     v <- suppressWarnings(as.numeric(d[[score]]))
     ok <- !is.na(v) & !is.na(d[[mc[["t"]]]]) & !is.na(d[[mc[["e"]]]])
-    if (sum(ok) < 2) return(NA_real_)
-    stats::sd(v[ok])
+    .score_sd(v[ok])
   }
   # Pull one stat cell (returns NA-filled list if the row is absent).
   cell <- function(ds, project, test, metric, score) {
@@ -769,7 +818,8 @@ build_subtype_survival_figures <- function(run_dir, out_dir) {
   proj$ylab     <- paste0(unname(DATASET_SHORT[proj$Dataset]), " · ", proj$Subgroup)
   CAT_LEVELS <- intersect(c("CMS","PDS","Stage","MSI"), unique(proj$Category))
 
-  END_LAB   <- c(OS = "3-yr OS", RFS = "3-yr RFS")
+  # Endpoint labels: use canonical ENDPOINT_LABEL from core/plotting.R (do not
+  # re-declare a local END_LAB duplicate).
   metrics   <- c("OS", "RFS")
 
   # ---- Assemble long cell table (all core scores; table uses all, Panel A a subset) ----
@@ -833,11 +883,11 @@ build_subtype_survival_figures <- function(run_dir, out_dir) {
       scale_x_discrete(labels = ck_lab) +
       labs(title = "DTP score vs 3-year outcome within molecular and clinical subgroups",
            subtitle = if (detailed)
-             paste0("Univariable Cox HR per 1 SD (landmark 36 mo). Cells: per-SD HR, raw p, FDR q (BH); * FDR<0.05.\n",
+             paste0("Univariable Cox HR per 1 SD (follow-up truncated at 36 mo). Cells: per-SD HR, raw p, FDR q (BH); * FDR<0.05.\n",
                     "Grey \"n/t\" = not testable (< ", MIN_EVENTS, " events / ", MIN_COX_N,
                     " n). Most subgroups are underpowered: a null or n/t cell is NOT evidence of absence.")
            else
-             paste0("Univariable Cox HR per 1 SD (landmark 36 mo). * = FDR<0.05.\n",
+             paste0("Univariable Cox HR per 1 SD (follow-up truncated at 36 mo). * = FDR<0.05.\n",
                     "Grey \"n/t\" = not testable (< ", MIN_EVENTS, " events / ", MIN_COX_N,
                     " n), distinct from tested-but-null.\n",
                     "Most subgroups are underpowered: a non-significant or not-testable cell is NOT evidence of absence."),
@@ -906,6 +956,10 @@ build_subtype_violin_composite <- function(run_dir, out_dir) {
 
   # KW eps^2 / raw p / FDR for one (axis, score) on the Marisa cohort; NA-safe.
   sss_g <- sss[sss$Dataset == "GSE39582", , drop = FALSE]
+  # n behind the saved Marisa PDS Kruskal-Wallis — computed over ALL PDS groups
+  # including "Mixed", which the violins drop. Read from the run, never hardcoded.
+  pds_n <- suppressWarnings(as.numeric(sss_g$N[sss_g$Subtype_Axis == "PDS"][1]))
+  pds_n <- if (is.na(pds_n)) "n/a" else as.character(as.integer(pds_n))
   kw <- function(axis, score) {
     r <- sss_g[sss_g$Subtype_Axis == axis & sss_g$Score == score, ]
     if (!nrow(r)) return(list(eps2 = NA_real_, raw = NA_real_, fdr = NA_real_))
@@ -996,10 +1050,16 @@ build_subtype_violin_composite <- function(run_dir, out_dir) {
         tag_levels = "A",
         title   = if (detailed)
           "DTP signature scores across molecular subtypes: Marisa (GSE39582)" else NULL,
-        caption = if (detailed) paste0(
-          "(A) Kruskal-Wallis eps2 of each DTP score across subtype levels, GSE39582 and TCGA-COAD.\n",
-          "(B) ssGSEA score by subtype for Marisa (violin = width-scaled; box = median/IQR); n per group on the x-axis.\n",
-          "PDS \"Mixed\" is excluded from the violins; the Kruskal-Wallis eps2 in (A) was computed over all PDS groups incl. Mixed (N=585).") else NULL,
+        # The PDS caveat is NOT gated on `detailed`: the publication copy is the one
+        # that carries the per-panel KW stars (make_cell adds them only there), so it
+        # is the copy that most needs to disclose that the PDS statistic came from a
+        # 4-group test the 3-group panel does not show.
+        caption = paste0(
+          if (detailed) paste0(
+            "(A) Kruskal-Wallis eps2 of each DTP score across subtype levels, GSE39582 and TCGA-COAD.\n",
+            "(B) ssGSEA score by subtype for Marisa (violin = width-scaled; box = median/IQR); n per group on the x-axis.\n") else "",
+          "PDS \"Mixed\" is excluded from the violins; the Kruskal-Wallis eps2 / FDR shown for PDS was computed over all PDS groups incl. Mixed (N=",
+          pds_n, ")."),
         theme = theme(plot.title   = element_text(face = "bold", size = 15, hjust = 0),
                       plot.caption = element_text(size = 8, colour = "grey30", hjust = 0),
                       plot.tag     = element_text(face = "bold", size = 16)))
@@ -1062,14 +1122,19 @@ build_confounding_figure <- function(run_dir, out_dir, primary_score = "Up_ssGSE
                           sprintf("d%+.0f%%", Delta_logHR_pct)),
            lab_full = ifelse(!Is_Testable, "n/t",
                       mapply(.stat_annot, detailed = TRUE, clean = "",
-                             effect = .effF, raw_p = LRT_score_P, fdr = FDR_P)),
-           # Dark tiles occur at BOTH colour extremes (strong attenuation OR
-           # strong strengthening), so switch to white text on either dark end.
-           lab_col = ifelse(!Is_Testable, "grey45",
-                     ifelse(!is.na(Delta_logHR_pct) & abs(Delta_logHR_pct) > 40,
+                             effect = .effF, raw_p = LRT_score_P, fdr = FDR_P)))
+  # Symmetric limits so 0% sits at white and +/-10% renders near-white. Computed
+  # BEFORE the labels because the text colour has to track this scale, not a fixed
+  # percentage: with a data-driven `lim`, an absolute cutoff would put white text on
+  # a near-white tile as soon as the run's largest shift grew.
+  lim <- ceiling(max(abs(d$Delta_logHR_pct), na.rm = TRUE) / 10) * 10
+  dark_at <- 0.65 * lim   # fraction of the ramp beyond which the fill is dark enough
+  pa <- pa %>%
+    # Dark tiles occur at BOTH colour extremes (strong attenuation OR strong
+    # strengthening), so switch to white text on either dark end.
+    mutate(lab_col = ifelse(!Is_Testable, "grey45",
+                     ifelse(!is.na(Delta_logHR_pct) & abs(Delta_logHR_pct) > dark_at,
                             "white", "grey10")))
-  # Symmetric limits so 0% sits at white and +/-10% renders near-white.
-  lim <- ceiling(max(abs(pa$Delta_logHR_pct), na.rm = TRUE) / 10) * 10
   make_fig <- function(detailed) {
     dd <- pa; dd$lab <- if (detailed) dd$lab_full else dd$lab_clean
     ggplot(dd, aes(x = Model, y = fct_rev(Metric), fill = Delta_logHR_pct)) +
@@ -1089,12 +1154,12 @@ build_confounding_figure <- function(run_dir, out_dir, primary_score = "Up_ssGSE
              paste0("Tile colour = % change in the DTP ", score_lab,
                     " score log-HR after adjustment (blue attenuated, red strengthened).\n",
                     "Cells: %-shift (effect), raw LRT p, BH-FDR q; * FDR<0.05; n/t = not testable.\n",
-                    "Per 1 SD, 36-mo landmark.  |shift| > 10% ~ meaningful confounding (Greenland).  Exploratory.")
+                    "Per 1 SD, follow-up truncated at 36 mo.  |shift| > 10% ~ meaningful confounding (Greenland).  Exploratory.")
            else
              paste0("Tile colour = % change in the DTP ", score_lab,
                     " score log-HR after adjustment (blue = attenuated toward null, red = strengthened).\n",
                     "Number = adjusted-model LRT BH-FDR (score vs covariate-only model); * marks FDR < 0.05.\n",
-                    "Per 1 SD, 36-mo landmark.  |shift| > 10% ~ meaningful confounding (Greenland).  Exploratory."),
+                    "Per 1 SD, follow-up truncated at 36 mo.  |shift| > 10% ~ meaningful confounding (Greenland).  Exploratory."),
            x = NULL, y = NULL) +
       .base_theme +
       theme(axis.text.x = element_text(size = 9),
@@ -1114,7 +1179,7 @@ build_confounding_figure <- function(run_dir, out_dir, primary_score = "Up_ssGSE
     "Figure 5. Independence of the DTP score after adjustment (Section 3.4; exploratory).",
     "",
     paste0("Adjusted-Cox confounding heatmap. Each cell is the DTP ", score_lab,
-           " score term from a landmark (36-month) Cox model of overall"),
+           " score term from a Cox model (follow-up truncated at 36 months) of overall"),
     "survival (OS) or recurrence-free survival (RFS), adjusted for clinicopathology (stage + microsatellite",
     "status), CMS subtype, or PDS subtype, in GSE39582 (whole cohort and adjuvant-treated subset) and TCGA-COAD.",
     "",
@@ -1189,7 +1254,7 @@ if (!exists("FOREST_XLIM")) FOREST_XLIM <- c(0.1, 10)
 .pancan_num <- function(x) suppressWarnings(as.numeric(x))
 
 # Within-cohort SD of one score over the SAME subset get_cox_stats() models:
-# non-NA score AND non-NA landmark time AND event for that metric.
+# non-NA score AND non-NA truncated follow-up time AND event for that metric.
 .pancan_sd <- function(master, project, score, metric) {
   ev <- .PANCAN_METRIC_EVT[[metric]]; tm <- .PANCAN_METRIC_TIM[[metric]]
   d  <- master[master$Project_ID == project, , drop = FALSE]
@@ -1201,29 +1266,48 @@ if (!exists("FOREST_XLIM")) FOREST_XLIM <- c(0.1, 10)
 
 # Add per-SD HR columns (point + both bounds) + direction + off-scale squish,
 # mirroring the CRC forest. `sd_vec` is aligned row-for-row with `d`.
+# Non-convergent fits (non-finite per-SD HR or CI) are NOT squished to the
+# FOREST_XLIM boundary — display coords stay NA so geoms drop them (na.rm).
 .pancan_rescale <- function(d, sd_vec) {
   hr <- .pancan_num(d$HR); lo <- .pancan_num(d$HR_lower); hi <- .pancan_num(d$HR_upper)
   ok <- !is.na(hr) & !is.na(sd_vec)
   d$hr_sd <- ifelse(ok, exp(log(hr) * sd_vec), NA_real_)
   d$lo_sd <- ifelse(ok, exp(log(lo) * sd_vec), NA_real_)
   d$hi_sd <- ifelse(ok, exp(log(hi) * sd_vec), NA_real_)
-  d$dir      <- ifelse(is.na(d$hr_sd), NA_character_,
+  nonconv <- (!is.na(d$hr_sd) & !is.finite(d$hr_sd)) |
+             (!is.na(d$lo_sd) & !is.finite(d$lo_sd)) |
+             (!is.na(d$hi_sd) & !is.finite(d$hi_sd))
+  if (any(nonconv))
+    message(sprintf(paste0("[pancan forest] %d non-convergent Cox row(s) not ",
+                           "squished to axis boundary (non-finite per-SD HR or CI)"),
+                    sum(nonconv)))
+  d$dir      <- ifelse(is.na(d$hr_sd) | nonconv, NA_character_,
                        ifelse(d$hr_sd > 1, "Higher hazard (HR>1)", "Lower hazard (HR<1)"))
-  d$offscale <- !is.na(d$hr_sd) & (d$hr_sd < FOREST_XLIM[1] | d$hr_sd > FOREST_XLIM[2])
-  d$hr_d <- scales::squish(d$hr_sd, FOREST_XLIM)
-  d$lo_d <- scales::squish(d$lo_sd, FOREST_XLIM)
-  d$hi_d <- scales::squish(d$hi_sd, FOREST_XLIM)
+  d$offscale <- !nonconv & !is.na(d$hr_sd) &
+                (d$hr_sd < FOREST_XLIM[1] | d$hr_sd > FOREST_XLIM[2])
+  d$hr_d <- ifelse(nonconv, NA_real_, scales::squish(d$hr_sd, FOREST_XLIM))
+  d$lo_d <- ifelse(nonconv, NA_real_, scales::squish(d$lo_sd, FOREST_XLIM))
+  d$hi_d <- ifelse(nonconv, NA_real_, scales::squish(d$hi_sd, FOREST_XLIM))
+  d$nonconv <- nonconv
   d
 }
 
 # Cohort row order shared by Panel A (Up forest) and Panel B (Composite/Down tile)
 # so the panels align: ascending Up overall-survival per-SD HR, not-testable OS
 # (NA) sorted to the bottom via na.last = FALSE.
-.pancan_cohort_order <- function(fdr, master) {
+# `order_score` is the Up column NAME, which is caller-supplied (run_pancan_treated
+# takes an `up_name`), so it must not be hardcoded: with no matching rows the order
+# silently degrades to CSV order while the subtitle and caption still claim the
+# ascending-Up-OS-HR ordering. Warn loudly rather than fail quietly.
+.pancan_cohort_order <- function(fdr, master, order_score = "Up_ssGSEA") {
   .dplyr_local(environment())
   d <- fdr %>% filter(Family == "PerCohort", Test == "Cox",
-                      Score == "Up_ssGSEA", Metric == "OS")
-  d <- .pancan_rescale(d, mapply(function(pr, mt) .pancan_sd(master, pr, "Up_ssGSEA", mt),
+                      Score == order_score, Metric == "OS")
+  if (!nrow(d))
+    warning("[pancan composites] no PerCohort/Cox/OS rows for ordering score '",
+            order_score, "'; cohort row order falls back to input order and is NOT ",
+            "the ascending Up-OS per-SD HR order the figure claims.", call. = FALSE)
+  d <- .pancan_rescale(d, mapply(function(pr, mt) .pancan_sd(master, pr, order_score, mt),
                                  d$Project, d$Metric))
   ord <- d$Project[order(d$hr_sd, na.last = FALSE)]
   unique(c(ord, setdiff(unique(fdr$Project[fdr$Family == "PerCohort"]), ord)))
@@ -1235,7 +1319,8 @@ if (!exists("FOREST_XLIM")) FOREST_XLIM <- c(0.1, 10)
 # the Up OS per-SD HR (shared helper) so the three panels line up tissue-for-tissue.
 # ==============================================================================
 build_pancan_forest <- function(fdr, master, out_dir, score = "Up_ssGSEA",
-                                score_lab = "DTP Up", save_name = "Fig6A_pancan_forest_Up") {
+                                score_lab = "DTP Up", save_name = "Fig6A_pancan_forest_Up",
+                                order_score = "Up_ssGSEA") {
   .dplyr_local(environment())
   SCORE <- score
   d <- fdr %>%
@@ -1249,7 +1334,7 @@ build_pancan_forest <- function(fdr, master, out_dir, score = "Up_ssGSEA",
   # Row order = ascending Up OS per-SD HR (shared helper; ggplot puts the first
   # level at the bottom, so the highest-hazard cohort lands at the top). ALL three
   # score panels reuse this same order so the tissues line up across A/B/C.
-  d$Project <- factor(d$Project, levels = .pancan_cohort_order(fdr, master))
+  d$Project <- factor(d$Project, levels = .pancan_cohort_order(fdr, master, order_score))
   d$Metric  <- factor(d$Metric, c("OS", "RFS"))
 
   # TCGA-COAD highlight: pale band behind the row (both facets) + coloured/bold label.
@@ -1618,6 +1703,40 @@ build_pancan_composites <- function(run_dir, out_dir = file.path(run_dir, "compo
     message("  ", msg); warning(msg, call. = FALSE); FALSE
   })
 
+  # ---- run-specific numbers for the caption blocks --------------------------
+  # These captions are REWRITTEN on every run and sit next to a freshly drawn
+  # figure, so every quantitative claim in them has to be read out of `fdr` — a
+  # hardcoded cohort list or r value would be indistinguishable from a current one
+  # after the signature panel or a cohort set changes.
+  .num  <- .pancan_num
+  .tv   <- function(x) { b <- suppressWarnings(as.logical(x)); !is.na(b) & b }
+  .cohort_endpoints <- function(sc, want_sig = TRUE) {
+    r <- fdr[fdr$Family == "PerCohort" & fdr$Test == "Cox" & fdr$Score == sc &
+             fdr$Metric %in% c("OS", "RFS"), , drop = FALSE]
+    r <- if (want_sig) r[.tv(r$Is_Significant), , drop = FALSE]
+         else          r[!.tv(r$Is_Testable), , drop = FALSE]
+    if (!nrow(r)) return(character(0))
+    r <- r[order(r$Project, r$Metric), , drop = FALSE]
+    paste(r$Project, r$Metric)
+  }
+  .listify <- function(x, none = "none") if (!length(x)) none else paste(x, collapse = ", ")
+  nt_up   <- .cohort_endpoints("Up_ssGSEA", want_sig = FALSE)
+  sig_up  <- .cohort_endpoints("Up_ssGSEA")
+  sig_cmp <- .cohort_endpoints("Composite_ssGSEA")
+  sig_dn  <- .cohort_endpoints("Down_ssGSEA")
+  # Pan-Cancer Wilcoxon r / FDR per score x endpoint, in the caption's own wording.
+  wc <- fdr[fdr$Family == "PanCancer" & fdr$Test == "Wilcoxon" &
+            fdr$Metric %in% c("OS", "RFS"), , drop = FALSE]
+  wc_txt <- if (!nrow(wc)) "no Pan-Cancer Wilcoxon rows in this run" else {
+    lab <- .PANCAN_CORR_LAB[wc$Score]
+    lab <- ifelse(is.na(lab), wc$Score, sub("^DTP ", "", lab))
+    f   <- .num(wc$FDR_P)
+    .listify(sprintf("%s %s r = %+.3f (FDR %s)", lab, wc$Metric, .num(wc$Effect_r),
+                     ifelse(is.na(f), "n/a",
+                       ifelse(f < 0.001, "< 0.001",
+                         paste0(sprintf("%.3f", f), ifelse(f >= 0.05, ", n.s.", ""))))))
+  }
+
   # Caption block alongside the figure.
   cap <- c(
     "Figure 6. Per-cohort DTP-score survival association across the pan-cancer TCGA cohort (Section 3.5).",
@@ -1628,10 +1747,12 @@ build_pancan_composites <- function(run_dir, out_dir = file.path(run_dir, "compo
     "confidence interval on a log scale (truncated to [0.1, 10]), faceted by endpoint: overall survival (OS) and",
     "recurrence (RFS, DFS-based from the TCGA-CDR disease-free interval). Red = HR > 1 (higher score, higher",
     "hazard), blue = HR < 1; an asterisk marks FDR < 0.05; a grey \"n/t\" marks a cohort that failed the Cox gate",
-    "(n >= 10 and >= 5 events; only TCGA-TGCT OS). All three panels share the SAME row order -- ascending DTP Up",
+    sprintf("(n >= 10 and >= 5 events; in this run: %s). All three panels share the SAME row order -- ascending DTP Up",
+            .listify(nt_up, "no cohort failed the gate")),
     "overall-survival per-SD HR -- so the tissues line up; TCGA-COAD (the colorectal tissue) is highlighted in each.",
-    "Composite is FDR-significant in seven cohort-endpoints (TCGA-KIRP OS and RFS, TCGA-GBM RFS, TCGA-LGG OS and",
-    "RFS, TCGA-PAAD OS and RFS) and Down in two (TCGA-LUAD OS, TCGA-CESC RFS) -- partly different tissues from Up.",
+    sprintf("Up is FDR-significant in %d cohort-endpoint(s) (%s);", length(sig_up), .listify(sig_up)),
+    sprintf("Composite in %d (%s);", length(sig_cmp), .listify(sig_cmp)),
+    sprintf("Down in %d (%s).", length(sig_dn), .listify(sig_dn)),
     "",
     "Hazard ratios are per 1 SD; the raw Cox HRs are per unit of the (log2) ssGSEA score and are not shown. FDR is",
     "Benjamini-Hochberg within each family (per-cohort vs. batch-corrected aggregate) and test, pooling OS and RFS.",
@@ -1649,9 +1770,8 @@ build_pancan_composites <- function(run_dir, out_dir = file.path(run_dir, "compo
     "outcome group -- no event vs event (died for OS; recurred for RFS). Six panels: the DTP Up, Down and Composite",
     "scores (rows) by overall survival and recurrence (columns). Each panel is annotated with the Pan-Cancer",
     "Wilcoxon rank-biserial effect size r and its Benjamini-Hochberg FDR; a NEGATIVE r means a higher score in the",
-    "event group. Up OS r = -0.079 (FDR < 0.001), Up RFS -0.052 (0.003), Down OS -0.059 (< 0.001), Down RFS -0.005",
-    "(0.776, n.s.), Composite OS -0.031 (0.041), Composite RFS -0.047 (0.006). Violin widths are scaled equal so the",
-    "unequal group sizes (annotated as n) are comparable.")
+    paste0("event group. In this run: ", wc_txt, "."),
+    "Violin widths are scaled equal so the unequal group sizes (annotated as n) are comparable.")
   writeLines(cap7, file.path(out_dir, "Fig7_pancan_violins_caption.txt"))
 
   n_ok <- sum(status); n <- length(status)
@@ -1741,13 +1861,25 @@ build_mets_gsea_composite <- function(mets_dir,
   sig_order <- c(ord, setdiff(union(df_np$ID, df_pm$ID), ord))
   glim      <- max(abs(c(df_np$NES, df_pm$NES)), na.rm = TRUE)
 
+  # sig_order is the UNION of the two results, so it can name a signature that one
+  # object lacks (a set can drop out of one contrast and not the other). Each
+  # enrichment plot may only be asked for IDs its own object holds —
+  # .gsea_running_data() stop()s otherwise, which would take the whole composite AND
+  # build_mets_liver_composite() (same tryCatch in run_composites) down with it. The
+  # shared order is preserved; only the missing rows are omitted, and flagged.
+  np_ids <- intersect(sig_order, df_np$ID)
+  pm_ids <- intersect(sig_order, df_pm$ID)
+  if (length(np_ids) < length(sig_order) || length(pm_ids) < length(sig_order))
+    message("  [mets GSEA] signature(s) absent from one contrast, omitted from that panel: ",
+            paste(setdiff(sig_order, intersect(np_ids, pm_ids)), collapse = ", "))
+
   # A / C enrichment plots have no per-cell stats to add, so build once. B / D NES
   # heatmaps carry the per-signature stats: rebuilt inside mk() with detailed = TRUE
   # for the titled copy, detailed = FALSE for the clean publication copy.
-  A <- plot_gsea_enrichment(gsea_np, gene_set_ids = sig_order,
+  A <- plot_gsea_enrichment(gsea_np, gene_set_ids = np_ids,
          title = "Normal vs Primary: all signatures",
          label_left = "Up in Normal", label_right = "Up in Primary")
-  C <- plot_gsea_enrichment(gsea_pm, gene_set_ids = sig_order,
+  C <- plot_gsea_enrichment(gsea_pm, gene_set_ids = pm_ids,
          title = "Primary vs Metastasis, purity-adjusted for liver score: all signatures",
          label_left = "Up in Metastasis", label_right = "Up in Primary")
 
@@ -1905,7 +2037,9 @@ if (sys.nframe() == 0L) {
   suppressPackageStartupMessages({
     library(dplyr); library(ggplot2); library(patchwork); library(limma)
   })
-  for (f in c("core/config.R", "core/plotting.R", "core/gsea_plots.R")) source(f)
+  # core/stats.R supplies harmonize_crc_modifiers(), the single definition of the
+  # CMS / PDS / Stage_bin / MSI_group modifier columns group 3 rebuilds.
+  for (f in c("core/config.R", "core/stats.R", "core/plotting.R", "core/gsea_plots.R")) source(f)
   .args <- commandArgs(trailingOnly = TRUE)
   run_composites(if (length(.args) >= 1) .args[[1]] else NULL)
 }

@@ -80,7 +80,7 @@ run_crc_subtyping(init_run("subtyping"))
 | 7 | Cox on the continuous score; median split kept for KM visualisation only | `core/stats.R` |
 | 8 | Rank-biserial effect size, `Is_Testable`, 3-way routing (significant / non_significant / not_tested) | `core/stats.R`, `core/plotting.R` |
 | 9 | Centralised gating thresholds applied identically | `core/config.R`, `core/stats.R` |
-| 10 | **FDR strategy — UNDECIDED (see below)** | `core/stats.R` |
+| 10 | **FDR strategy — FINALIZED (per-module grouping; see below)** | `core/stats.R` |
 | 11 | CMS/CRIS/PDS subtyping pulled to `subtyping/crc_subtyping.R` | `subtyping/` |
 | 12 | One score-naming convention `<Signature>_ssGSEA` | `core/scoring.R` |
 | 13 | One ggplot theme + palette | `core/plotting.R` |
@@ -89,19 +89,22 @@ run_crc_subtyping(init_run("subtyping"))
 | 16 | Shared caching / checkpoint discipline | `core/io.R`, `modules/` |
 | 17 | Primary-tumour only in both CRC and pan-cancer (metastatic fallback removed) | `core/config.R`, `core/expression.R` |
 
-## Open items (still need your decision)
+### #10 — FDR strategy (finalized)
 
-**#10 — FDR strategy.** This is deliberately left as you found it. `apply_fdr()`
-takes an explicit `by` grouping, and each module calls it with the key that
-**replicates its original behaviour**, so no result silently changes:
+`apply_fdr()` takes an explicit `by` grouping. Each module keeps its own
+grouping so that each preserves its original statistical behaviour; the two
+groupings are intentionally different because the modules ask different
+questions (single-cohort CRC vs. cross-cohort pan-cancer):
 
 - `crc_survival`: `by = c("Dataset","Project","Test","Metric")`
 - `pancan_survival`: `by = c("Family","Test")`
 
-Both call sites are flagged `PROVISIONAL`. Once you settle on a unified scheme,
-it's a one-line edit at each. The trade-off to think through is the correction
-family: per-cohort × test × metric (more power, more tests overall) versus a
-single pooled family across the whole project (stricter, fewer false positives).
+Trade-off of the correction family: per-cohort × test × metric (more power,
+more tests overall) versus a single pooled family across the whole project
+(stricter, fewer false positives). The adopted approach is the former for CRC
+and Family × Test for pan-cancer, matching each module's original design.
+
+## Open items (still need your decision)
 
 **#11 — Subtyping.** Extracted and standalone. Before relying on its calls,
 resolve the three notes at the top of `subtyping/crc_subtyping.R`: the

@@ -1,6 +1,6 @@
 # ==============================================================================
 # core/stats.R  —  Shared statistics: continuous-score Cox (#7), effect size +
-# testability (#8), unified gating thresholds (#9), provisional FDR (#10),
+# testability (#8), unified gating thresholds (#9), finalized FDR (#10),
 # and a high-level survival runner so both modules treat stats identically.
 # ==============================================================================
 
@@ -231,19 +231,24 @@ run_all_stats <- function(df, score_col, metric, dataset, proj, score_name, grou
 }
 
 # ------------------------------------------------------------------------------
-# FDR correction (#10) — PROVISIONAL.
+# FDR correction (#10) — FINALIZED (adopted per-module grouping).
 # ------------------------------------------------------------------------------
-# !!! The cross-module unified FDR strategy is an OPEN DECISION. Until it is
-# !!! settled, each module calls apply_fdr() with the `by` key that REPLICATES
-# !!! its original behaviour, so no result silently changes:
-# !!!   CRC arm:        by = c("Dataset","Project","Test","Metric")
-# !!!   pan-cancer arm: by = c("Family","Test")
-# !!! Changing the agreed scheme later is a one-line edit at each call site.
+# Each module calls apply_fdr() with its own `by` key. This is intentional and
+# final: per-module grouping preserves each module's original statistical
+# behaviour, and the two groupings differ because the modules ask different
+# questions (single-cohort CRC vs. cross-cohort pan-cancer):
+#   CRC arm:        by = c("Dataset","Project","Test","Metric")
+#   pan-cancer arm: by = c("Family","Test")
 # ------------------------------------------------------------------------------
-apply_fdr <- function(stats_df, by) {
+# `p_col` is the p-value column BH acts on (default "Raw_P"). Most families use the
+# Wald/score p in Raw_P; the confounding (adjusted-Cox) family passes
+# p_col = "LRT_score_P" so its FDR is the likelihood-ratio test of the score vs the
+# covariate-only model — the same nested-model test the interaction family already
+# uses, and more robust than Wald for the very large HRs here.
+apply_fdr <- function(stats_df, by, p_col = "Raw_P") {
   stats_df %>%
     dplyr::group_by(dplyr::across(dplyr::all_of(by))) %>%
-    dplyr::mutate(FDR_P = p.adjust(Raw_P, method = "BH")) %>%
+    dplyr::mutate(FDR_P = p.adjust(.data[[p_col]], method = "BH")) %>%
     dplyr::ungroup() %>%
     dplyr::mutate(Is_Significant = !is.na(FDR_P) & FDR_P < 0.05)
 }

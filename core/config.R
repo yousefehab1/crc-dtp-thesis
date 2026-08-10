@@ -35,7 +35,7 @@ CDR_FILE     <- "Data/TCGA-CDR.csv"
 CDR_RFS_TYPE <- "PFI"
 
 # --- Inputs / cache -----------------------------------------------------------
-SIG_FILE  <- "Data/Fatemeh.csv"        # master panel; each module selects which columns it uses (#1)
+SIG_FILE  <- "Data/final.csv"        # master panel; each module selects which columns it uses (#1)
 CACHE_DIR <- "cache"          # shared GEO/GDC object cache (#16)
 
 # --- Gene ID type -------------------------------------------------------------

@@ -98,8 +98,16 @@ run_mets_de <- function(out_root, panel, core_signature = "UP") {
   log2_2way <- log2_matrix[, keep2]; cd2 <- droplevels(cd[keep2, ])
 
   # ---- Liver-purity covariate + negative-control validation ------------------
-  liver_genes_sym <- msigdbr::msigdbr(species = "Homo sapiens") %>%
-    dplyr::filter(gs_name == "HSIAO_LIVER_SPECIFIC_GENES") %>% dplyr::pull(gene_symbol) %>% unique()
+  # Cache the gene-set lookup (msigdbr loads ~100k rows just for one set).
+  # ID_TYPE-independent: msigdbr always returns symbols; convert_gene_ids() below
+  # handles ID_TYPE. If msigdbr is upgraded to a newer MSigDB release, delete
+  # cache/msigdbr_hsiao_liver_specific_genes.rds manually to pick up the update
+  # (same manual-invalidation convention as every other cache_rds() call).
+  liver_genes_sym <- cache_rds("msigdbr_hsiao_liver_specific_genes", function() {
+    msigdbr::msigdbr(species = "Homo sapiens") %>%
+      dplyr::filter(gs_name == "HSIAO_LIVER_SPECIFIC_GENES") %>%
+      dplyr::pull(gene_symbol) %>% unique()
+  })
   # Convert liver gene symbols to ID_TYPE so they match the expression matrix.
   liver_genes <- if (ID_TYPE == "ensembl")
     convert_gene_ids(liver_genes_sym, from = "SYMBOL", to = "ENSEMBL")

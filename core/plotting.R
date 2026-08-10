@@ -22,6 +22,87 @@ pub_palette <- c(
   "Normal"          = "#55A868", "Primary"         = "#4C72B0", "Metastasis" = "#C44E52"
 )
 
+# --- Shared composite-figure vocabulary (composite_figures.R + gsea_plots.R) ---
+# Canonical cohort/endpoint labels, one significance-star helper, one save path,
+# and a title/subtitle stripper. Defined here (sourced before both figure files)
+# so the composites and the mets GSEA figure speak the same language.
+
+# Canonical dataset display labels, keyed by the `Dataset` values in the run CSVs.
+# DATASET_FULL for facet strips / row headers; DATASET_SHORT for tight columns.
+DATASET_FULL  <- c("GSE39582" = "Marisa (GSE39582)",
+                   "GSE39582 (treated)" = "Marisa treated",
+                   "TCGA-COAD" = "TCGA-COAD")
+DATASET_SHORT <- c("GSE39582" = "Marisa",
+                   "GSE39582 (treated)" = "Marisa treated",
+                   "TCGA-COAD" = "TCGA")
+ENDPOINT_LABEL <- c(OS = "3-yr OS", RFS = "3-yr RFS")
+
+# Significance stars from a p-value; `ns` is the label for testable-but-not-significant.
+.sig_stars <- function(p, ns = "") ifelse(is.na(p), "",
+  ifelse(p < 0.001, "***", ifelse(p < 0.01, "**", ifelse(p < 0.05, "*", ns))))
+
+# Compact p-value string, e.g. .fmt_p("p", 0.012) -> "p=.012", .fmt_p("q", 5e-5)
+# -> "q<.001". Leading zero dropped (journal style). Scalar-in, scalar-out; NA in
+# -> NA out so na.omit() drops it inside .stat_annot().
+.fmt_p <- function(prefix, p)
+  if (length(p) != 1 || is.na(p)) NA_character_ else
+    paste0(prefix, if (p < 0.001) "<.001" else sub("^0", "", sprintf("=%.3f", p)))
+
+# Build a cell/annotation label that switches on the `detailed` flag. When
+# detailed = FALSE the caller's existing `clean` label is returned verbatim (so
+# the publication/ copies stay byte-for-behaviour identical to today). When
+# detailed = TRUE the titled composite gets the full statistics on separate
+# lines: the native effect-size string (already formatted by the caller), then
+# raw p, then FDR q with its significance star. Any NA component is dropped.
+.stat_annot <- function(detailed, clean = "", effect = NULL, raw_p = NA,
+                        fdr = NA, sep = "\n") {
+  if (!isTRUE(detailed)) return(clean)
+  parts <- c(effect, .fmt_p("p", raw_p),
+             if (length(fdr) == 1 && !is.na(fdr))
+               paste0(.fmt_p("q", fdr), .sig_stars(fdr, "")))
+  parts <- parts[!is.na(parts) & nzchar(parts)]
+  if (!length(parts)) return(clean)
+  paste(parts, collapse = sep)
+}
+
+# Blank title + subtitle for a plain ggplot OR a patchwork. Apply this to the
+# COMPONENT plots BEFORE wrap_elements()/assembly: wrap_elements() freezes an
+# inner plot so a theme added to the outer composite never reaches it, whereas
+# `&` here reaches every direct patch of the component, and the added
+# plot_annotation(theme=bl) blanks a sub-patchwork's own annotation title.
+# Panel tags (A/B/…) are added at the outer composite, so they survive.
+.strip_titles <- function(p) {
+  bl <- ggplot2::theme(plot.title = ggplot2::element_blank(),
+                       plot.subtitle = ggplot2::element_blank())
+  if (inherits(p, "patchwork"))
+    (p & bl) + patchwork::plot_annotation(title = NULL, subtitle = NULL, theme = bl)
+  else p + bl
+}
+
+# Vector PDF (base device, no cairo/X11 dependency) + 300-dpi PNG (ragg if present).
+# Creates out_dir if needed, so callers can save straight into a publication/ subdir.
+.png_dev <- if (requireNamespace("ragg", quietly = TRUE)) ragg::agg_png else NULL
+.save_fig <- function(p, name, w, h, out_dir) {
+  dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+  ggplot2::ggsave(file.path(out_dir, paste0(name, ".pdf")), p, width = w, height = h,
+                  device = grDevices::pdf, limitsize = FALSE)
+  ggplot2::ggsave(file.path(out_dir, paste0(name, ".png")), p, width = w, height = h,
+                  dpi = 300, bg = "white", limitsize = FALSE, device = .png_dev)
+  message("  wrote ", name, " (", w, "x", h, " in)")
+}
+
+# Shared composite base theme (CRC composites, mets, pan-cancer). Left-aligned
+# bold title, grey strip headers, bottom legend. Namespaced so it is safe to
+# build at source time regardless of whether ggplot2 is attached yet.
+.base_theme <- ggplot2::theme_classic(base_size = 11) +
+  ggplot2::theme(
+    plot.title      = ggplot2::element_text(face = "bold", size = 14, hjust = 0),
+    plot.subtitle   = ggplot2::element_text(size = 10, colour = "grey30", hjust = 0),
+    strip.background = ggplot2::element_rect(fill = "grey92", colour = NA),
+    strip.text      = ggplot2::element_text(face = "bold", size = 9),
+    legend.position = "bottom",
+    plot.tag        = ggplot2::element_text(face = "bold", size = 16))
+
 # --- Significance lookup + folder routing (#8) --------------------------------
 get_stat_info <- function(stats_df, dataset, proj, test, metric, score) {
   row <- stats_df %>%

@@ -6,7 +6,8 @@
 # ssGSEA + dropped back-transform (#2b), log-space collapse (#3), Dead/Alive
 # labels (#5), censoring-aware endpoints (#6), continuous Cox (#7), effect size
 # + 3-way routing (#8), gating (#9), primary-only — metastatic fallback removed
-# (#17). FDR PROVISIONAL (#10): by=Family×Test (replicates Panncan.R).
+# (#17). FDR finalized (#10): by=Family×Test (adopted pan-cancer grouping;
+# intentionally distinct from crc_survival's Dataset×Project×Test×Metric).
 # ==============================================================================
 
 # Returns TRUE for errors that may resolve on retry (network, server-side).
@@ -246,7 +247,10 @@ run_pancan_survival <- function(out_root, panel,
       # Large cohorts (> .PANCAN_CHUNK_SIZE) are processed in chunks so that
       # GDCprepare never loads more than chunk_size samples at once, keeping
       # peak RAM proportional to chunk_size rather than the full cohort.
-      mat <- cache_rds(paste0("tpm_", proj), function() {
+      # ID_TYPE is part of the TPM key: prep_tcga_tpm() (including via
+      # .prep_tpm_chunked) bakes ID_TYPE into rownames, so a plain key would
+      # return the wrong gene-ID namespace after switching ID_TYPE.
+      mat <- cache_rds(paste0("tpm_", proj, "_", ID_TYPE), function() {
         if (length(valid_patients) > .PANCAN_CHUNK_SIZE) {
           .prep_tpm_chunked(proj, valid_patients)
         } else {
@@ -404,6 +408,9 @@ run_pancan_survival <- function(out_root, panel,
   for (sc in uncorr_cols)
     for (m in c("OS", "RFS"))
       generate_forest(stats_df, "PanCancer", m, sc, out_root, module, exclude_proj = "Pan-Cancer")
+
+  # Composite figure + table (§3.5) are built separately by modules/composites.R
+  # (run_composites), decoupled from this analysis run — see main.R.
 
   message("Pan-cancer survival module complete.")
   invisible(stats_df)
