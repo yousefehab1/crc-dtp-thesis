@@ -14,7 +14,7 @@ The subgroup breakdown supports the specificity of the primary signal rather tha
 
 **Figure 6. DTP score and outcome within molecular and clinical subgroups.** Each cell shows the univariable Cox hazard ratio per one standard deviation of the continuous score on a log2 scale, for the DTP up and composite scores against three-year overall survival and recurrence, within each CMS, PDS, stage and microsatellite stratum of GSE39582 and TCGA-COAD. Red marks higher hazard with higher score; asterisks mark FDR below 0.05. Grey cells labelled n/t failed the testability gate (fewer than 5 events or 10 patients) and are kept distinct from tested-but-null cells. Most strata are underpowered, so a non-significant or not-testable cell is not evidence of absence. The GSE39582 rows are labelled Marisa, after the source publication. Full per-subgroup hazard ratios, confidence intervals and corrected p-values are in Appendix Table A1.
 
-![Figure 7](figures/Fig3_3C_marisa_subtype_violins.png)
+![Figure 7](figures/Fig3_3C_subtype_violins.png)
 
 **Figure 7. The DTP score across molecular subtypes.** (A) Score-across-subtype effect sizes. Each cell shows the Kruskal-Wallis epsilon-squared effect size for the difference in a score (DTP up, down, composite) across CMS or PDS levels, in GSE39582 and TCGA-COAD; asterisks mark FDR below 0.05. The DTP up score varies strongly across both taxonomies, most across PDS. (B) Score distributions across subtype. DTP up, down and composite ssGSEA scores across the CMS1 to CMS4 and PDS1 to PDS3 strata of GSE39582, one violin per subtype level with its sample size; the up and composite scores rise across subtype, most clearly across PDS. The Kruskal-Wallis epsilon-squared effect sizes and their FDR are annotated in panel A.
 

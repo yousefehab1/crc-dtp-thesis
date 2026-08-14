@@ -929,144 +929,200 @@ build_subtype_survival_figures <- function(run_dir, out_dir) {
 }
 
 # =============================================================================
-# GROUP 4b — Marisa subtype-score violins (thesis Section 3.3, companion to the
-#   Panel B eps^2 heatmap). A 3-row x 2-column grid: one DTP core score per row
-#   (DTP Up / Down / Composite), one subtype axis per column (CMS / PDS). Each
-#   cell is the per-sample ssGSEA score distribution across that axis's subtype
-#   levels for the Marisa (GSE39582) cohort only.
-#   CMS shows CMS1-4 (unclassified NA dropped); PDS shows PDS1-3 (Mixed dropped,
-#   matching the Cox convention). The annotated Kruskal-Wallis eps^2/FDR is read
-#   verbatim from Subtype_Score_Stats.csv (figures never recompute stats) — that
-#   saved PDS stat was computed over 4 groups incl. Mixed (N=585), flagged in the
-#   caption. Rebuildable from a completed run's GSE39582 CSVs alone.
+# GROUP 4b — subtype-score violins (thesis Section 3.3, Fig3_3C). One 3-row x
+#   4-column grid: rows = DTP core score (Up / Down / Composite), columns =
+#   cohort x subtype-axis (Marisa CMS, Marisa PDS, TCGA-COAD CMS, TCGA-COAD PDS).
+#   Each cell is the per-sample ssGSEA score distribution across that axis's
+#   subtype levels for that cohort. CMS shows CMS1-4 (unclassified NA dropped);
+#   PDS shows PDS1-3 ("Mixed" dropped, matching the Cox convention elsewhere).
+#
+#   Unlike the retired eps2/KW panel this composite used to carry (that omnibus
+#   test is now standalone as Fig3_3B_score_across_subtype via
+#   .subtype_eps2_heatmap(), unchanged), every subtype PAIR within an axis is
+#   tested directly: pairwise Mann-Whitney with rank-biserial r
+#   (get_wilcox_stats(), core/stats.R), BH-corrected within each
+#   (Dataset, Axis, Score) family — the same family the single omnibus KW test
+#   used to cover — and written in full to Table_3_3C_subtype_pairwise.csv. Only
+#   FDR<0.05 pairs are bracketed on the figure, so the figure and the CSV make
+#   identical claims by construction. Rebuildable from a completed run's
+#   GSE39582 + TCGA-COAD clinical CSVs alone.
 # =============================================================================
 .SUBTYPE_LEVELS <- list(CMS = c("CMS1", "CMS2", "CMS3", "CMS4"),
                         PDS = c("PDS1", "PDS2", "PDS3"))
 
+# Pairwise Mann-Whitney + rank-biserial r for one (Dataset, Axis, Score), one row
+# per unordered pair of that axis's .SUBTYPE_LEVELS (CMS: 6 pairs; PDS: 3 pairs).
+# Pairs are factored in .SUBTYPE_LEVELS order, so get_wilcox_stats() (Group_A =
+# first/"x" argument to wilcox.test(), Group_B = second/"y") yields: NEGATIVE r =
+# higher score in Group_A (the earlier-numbered subtype); POSITIVE r = higher
+# score in Group_B (the later-numbered one) — verified against Median_A/Median_B
+# in the emitted table. FDR is left to the caller (family-level BH).
+.subtype_pair_stats <- function(clin, dataset, axis, score) {
+  lv <- .SUBTYPE_LEVELS[[axis]]
+  d  <- clin[clin[[axis]] %in% lv, c(axis, score)]
+  d[[score]] <- suppressWarnings(as.numeric(d[[score]]))
+  d  <- d[!is.na(d[[score]]), , drop = FALSE]
+  rows <- lapply(utils::combn(lv, 2, simplify = FALSE), function(pr) {
+    dd <- d[d[[axis]] %in% pr, , drop = FALSE]
+    dd[[axis]] <- factor(dd[[axis]], levels = pr)
+    a  <- dd[[score]][dd[[axis]] == pr[1]]; b <- dd[[score]][dd[[axis]] == pr[2]]
+    ws <- get_wilcox_stats(dd, score, axis)
+    data.frame(Dataset = dataset, Subtype_Axis = axis, Score = score,
+               Group_A = pr[1], Group_B = pr[2], N_A = length(a), N_B = length(b),
+               Median_A = if (length(a)) median(a) else NA_real_,
+               Median_B = if (length(b)) median(b) else NA_real_,
+               Effect_r = ws$r, Raw_P = ws$p, Is_Testable = !is.na(ws$p),
+               stringsAsFactors = FALSE)
+  })
+  do.call(rbind, rows)
+}
+
+# Nested significance brackets (narrowest span first, stacked upward) for the
+# FDR<0.05 pairs of one cell. `lv` gives x-position order (match(level, lv));
+# `y0`/`span` are the cell's base data range top / width, before any bracket
+# headroom. Returns the annotate() layers plus the ylim top the cell needs to
+# fit every bracket it draws — the source of the plan's per-cell headroom.
+.violin_brackets <- function(sig_df, lv, y0, span, detailed) {
+  if (!nrow(sig_df)) return(list(layers = list(), ylim_top = y0 + span * 0.06))
+  sig_df$xa <- match(sig_df$Group_A, lv); sig_df$xb <- match(sig_df$Group_B, lv)
+  sig_df <- sig_df[order(abs(sig_df$xb - sig_df$xa)), ]
+  step   <- span * 0.11; tick_h <- step * 0.22
+  layers <- list()
+  for (i in seq_len(nrow(sig_df))) {
+    r <- sig_df[i, ]; y <- y0 + i * step
+    lab <- if (detailed) paste0(.sig_stars(r$FDR_P, ""), "\n", .fmt_p("q", r$FDR_P))
+           else .sig_stars(r$FDR_P, "")
+    layers[[length(layers) + 1]] <- ggplot2::annotate("segment",
+      x = r$xa, xend = r$xb, y = y, yend = y, linewidth = 0.4, colour = "grey20")
+    layers[[length(layers) + 1]] <- ggplot2::annotate("segment",
+      x = c(r$xa, r$xb), xend = c(r$xa, r$xb), y = y, yend = y - tick_h,
+      linewidth = 0.4, colour = "grey20")
+    layers[[length(layers) + 1]] <- ggplot2::annotate("text",
+      x = (r$xa + r$xb) / 2, y = y, label = lab, vjust = -0.15,
+      size = if (detailed) 2.5 else 3, fontface = "bold", colour = "grey10",
+      lineheight = 0.85)
+  }
+  list(layers = layers, ylim_top = y0 + nrow(sig_df) * step + step * 0.9)
+}
+
 build_subtype_violin_composite <- function(run_dir, out_dir) {
-  message("[group 4b] Marisa subtype-score violins (Section 3.3)")
+  message("[group 4b] subtype-score violins (Section 3.3)")
   .dplyr_local(environment())
 
-  clin <- .rd(run_dir, "GSE39582_clinical.csv")
-  sss  <- .rd(run_dir, "Subtype_Score_Stats.csv")
-  axes <- names(.SUBTYPE_LEVELS)                    # CMS, PDS (column order)
-  miss <- setdiff(c(.CORE_SCORES, axes), names(clin))
-  if (length(miss))
-    stop("GSE39582_clinical.csv missing column(s): ", paste(miss, collapse = ", "))
-
-  # KW eps^2 / raw p / FDR for one (axis, score) on the Marisa cohort; NA-safe.
-  sss_g <- sss[sss$Dataset == "GSE39582", , drop = FALSE]
-  # n behind the saved Marisa PDS Kruskal-Wallis — computed over ALL PDS groups
-  # including "Mixed", which the violins drop. Read from the run, never hardcoded.
-  pds_n <- suppressWarnings(as.numeric(sss_g$N[sss_g$Subtype_Axis == "PDS"][1]))
-  pds_n <- if (is.na(pds_n)) "n/a" else as.character(as.integer(pds_n))
-  kw <- function(axis, score) {
-    r <- sss_g[sss_g$Subtype_Axis == axis & sss_g$Score == score, ]
-    if (!nrow(r)) return(list(eps2 = NA_real_, raw = NA_real_, fdr = NA_real_))
-    list(eps2 = suppressWarnings(as.numeric(r$Eps2[1])),
-         raw  = suppressWarnings(as.numeric(r$Raw_P[1])),
-         fdr  = suppressWarnings(as.numeric(r$FDR_P[1])))
+  clin_list <- list(GSE39582 = .rd(run_dir, "GSE39582_clinical.csv"),
+                    `TCGA-COAD` = .rd(run_dir, "TCGA_COAD_clinical.csv"))
+  axes <- names(.SUBTYPE_LEVELS)                    # CMS, PDS (within-cohort column order)
+  for (ds in names(clin_list)) {
+    miss <- setdiff(c(.CORE_SCORES, axes), names(clin_list[[ds]]))
+    if (length(miss))
+      stop(ds, "_clinical.csv missing column(s): ", paste(miss, collapse = ", "))
   }
-  AXIS_LAB <- c(CMS = "CMS subtype", PDS = "PDS subtype")
 
-  # Shared y-range per signature row (CMS and PDS partition the same patients, so
-  # a common window makes the two columns directly comparable). coord_cartesian
-  # zooms without dropping points, so the violin densities stay honest.
-  row_ylim <- function(score) {
-    v <- suppressWarnings(as.numeric(clin[[score]])); v <- v[!is.na(v)]
+  # ---- Pairwise Mann-Whitney table (the figure can only bracket what's here) ----
+  pw <- do.call(rbind, lapply(names(clin_list), function(ds)
+    do.call(rbind, lapply(axes, function(ax)
+      do.call(rbind, lapply(.CORE_SCORES, function(sc)
+        .subtype_pair_stats(clin_list[[ds]], ds, ax, sc)))))))
+  pw <- pw %>%
+    group_by(Dataset, Subtype_Axis, Score) %>%
+    mutate(FDR_P = p.adjust(Raw_P, method = "BH")) %>%
+    ungroup() %>%
+    mutate(FDR_P_global = p.adjust(Raw_P, method = "BH"),
+           Is_Significant = !is.na(FDR_P) & FDR_P < 0.05)
+  out_tbl <- pw %>%
+    transmute(Dataset, Subtype_Axis, Score, Group_A, Group_B, N_A, N_B,
+              Median_A = round(Median_A, 4), Median_B = round(Median_B, 4),
+              Effect_r = round(Effect_r, 3), Raw_P, FDR_P, FDR_P_global,
+              Is_Testable, Is_Significant)
+  readr::write_csv(out_tbl, file.path(out_dir, "Table_3_3C_subtype_pairwise.csv"))
+  message("  wrote Table_3_3C_subtype_pairwise.csv (", nrow(out_tbl), " rows)")
+
+  # Grid columns, Axis varying fastest within a Dataset: (Marisa,CMS), (Marisa,PDS),
+  # (TCGA-COAD,CMS), (TCGA-COAD,PDS) — the 4-column layout the plan specifies.
+  cols <- expand.grid(Axis = axes, Dataset = names(clin_list), stringsAsFactors = FALSE)
+
+  # Base y-range shared PER (Dataset, Score): the two cohorts sit on different
+  # ssGSEA scales, so a grid-wide (or row-wide) window would flatten one of them;
+  # the two axis columns of the SAME cohort+score are directly comparable, so they
+  # share this base range. Per-cell bracket headroom is layered on in make_cell().
+  base_ylim <- function(dataset, score) {
+    v <- suppressWarnings(as.numeric(clin_list[[dataset]][[score]])); v <- v[!is.na(v)]
     rng <- range(v); pad <- diff(rng) * 0.04
     c(rng[1] - pad, rng[2] + pad)
   }
 
   # One violin cell. Column header (top row only) is a plot.title so it is
   # dropped by .strip_titles for the publication copy — the CMS1-4 / PDS1-3 x
-  # ticks self-identify the column; the row identity is the left-column y-axis
-  # title, which survives stripping.
-  make_cell <- function(score, axis, detailed, ylim) {
+  # ticks self-identify the column; the row identity is the left-most column's
+  # y-axis title, which survives stripping. Brackets are annotate() layers, so
+  # they are untouched by .strip_titles and appear identically in both copies.
+  make_cell <- function(score, dataset, axis, detailed, is_top_row, is_left_col) {
     lv <- .SUBTYPE_LEVELS[[axis]]
-    d  <- clin[clin[[axis]] %in% lv, c(axis, score)]
+    cl <- clin_list[[dataset]]
+    d  <- cl[cl[[axis]] %in% lv, c(axis, score)]
     d[[score]] <- suppressWarnings(as.numeric(d[[score]]))
     d  <- d[!is.na(d[[score]]), , drop = FALSE]
     d[[axis]] <- factor(d[[axis]], levels = lv)
     tb   <- table(d[[axis]])
     lbls <- setNames(paste0(names(tb), "\n(n=", as.integer(tb), ")"), names(tb))
 
-    k   <- kw(axis, score)
-    sub <- if (detailed)
-             .stat_annot(TRUE,
-                         effect = if (is.na(k$eps2)) NULL else sprintf("KW eps2=%.2f", k$eps2),
-                         raw_p = k$raw, fdr = k$fdr, sep = "  |  ")
-           else NULL
+    bylim <- base_ylim(dataset, score)
+    sig   <- pw[pw$Dataset == dataset & pw$Subtype_Axis == axis & pw$Score == score &
+                pw$Is_Significant, , drop = FALSE]
+    br    <- .violin_brackets(sig, lv, bylim[2], diff(bylim), detailed)
 
-    p <- ggplot(d, aes(x = .data[[axis]], y = .data[[score]], fill = .data[[axis]])) +
+    ggplot(d, aes(x = .data[[axis]], y = .data[[score]], fill = .data[[axis]])) +
       geom_violin(alpha = 0.8, trim = FALSE, scale = "width",
                   linewidth = 0.3, colour = "grey30") +
       geom_boxplot(width = 0.15, fill = "white", alpha = 0.9,
                    outlier.shape = NA, linewidth = 0.3) +
+      br$layers +
       scale_fill_brewer(palette = "Set2") +
       scale_x_discrete(labels = lbls) +
-      coord_cartesian(ylim = ylim) +
-      labs(title    = if (score == .CORE_SCORES[[1]]) AXIS_LAB[[axis]] else NULL,
-           subtitle = sub, x = NULL,
-           y = if (axis == axes[[1]]) paste0(.CORE_LABEL[[score]], " ssGSEA") else NULL) +
+      coord_cartesian(ylim = c(bylim[1], br$ylim_top)) +
+      labs(title = if (is_top_row) sprintf("%s · %s", DATASET_FULL[[dataset]], axis) else NULL,
+           x = NULL,
+           y = if (is_left_col) paste0(.CORE_LABEL[[score]], " ssGSEA") else NULL) +
       .base_theme +
       theme(legend.position = "none",
-            plot.title    = element_text(face = "bold", size = 12, hjust = 0.5),
-            plot.subtitle = element_text(size = 8.5, colour = "grey30", hjust = 0.5),
-            axis.text.x   = element_text(size = 8, lineheight = 0.85))
-
-    # Per-panel Kruskal-Wallis significance (BH-FDR) as an annotation layer so it
-    # survives .strip_titles() in the publication copy — which loses the eps2/FDR
-    # subtitle carried by the detailed copy. Only added there (detailed already
-    # states it in the subtitle). Stars for FDR<0.05, "n.s." otherwise.
-    star_lab <- .sig_stars(k$fdr, "n.s.")
-    if (!detailed && nzchar(star_lab))
-      p <- p + annotate("text", x = -Inf, y = Inf, hjust = -0.6, vjust = 1.5,
-                        label = star_lab, size = 5, fontface = "bold", colour = "grey20")
-    p
+            plot.title  = element_text(face = "bold", size = 11, hjust = 0.5),
+            axis.text.x = element_text(size = 7.5, lineheight = 0.85))
   }
 
-  # Panel A: the 3x2 violin grid (a patchwork of the 6 cells).
-  make_violin_grid <- function(detailed) {
+  # The 3x4 violin grid (a patchwork of the 12 cells) — no A/B panel tags; this
+  # is now the whole figure, not one panel of a taller composite.
+  make_grid <- function(detailed) {
     cells <- list()
     for (sc in .CORE_SCORES) {
-      yl <- row_ylim(sc)
-      for (ax in axes) cells[[length(cells) + 1]] <- make_cell(sc, ax, detailed, yl)
+      is_top <- sc == .CORE_SCORES[[1]]
+      for (i in seq_len(nrow(cols))) {
+        is_left <- cols$Dataset[i] == names(clin_list)[[1]] && cols$Axis[i] == axes[[1]]
+        cells[[length(cells) + 1]] <- make_cell(
+          sc, cols$Dataset[i], cols$Axis[i], detailed, is_top, is_left)
+      }
     }
-    wrap_plots(cells, ncol = 2, byrow = TRUE)
+    wrap_plots(cells, ncol = nrow(cols), byrow = TRUE)
   }
 
-  # A (score-across-subtype eps^2 heatmap, all cohorts — GSE39582 + TCGA-COAD —
-  # via the shared .subtype_eps2_heatmap helper) over B (Marisa violins). Panels
-  # are stripped before wrap_elements() for the publication copy; the A/B tags are
-  # added at the outer composite so they survive stripping.
+  CAP <- paste0(
+    "Marisa (GSE39582) and TCGA-COAD; CMS and PDS subtype axes. CMS-unclassified and PDS \"Mixed\" are excluded.\n",
+    "Pairwise Mann-Whitney tests with rank-biserial r, BH-corrected within each cohort x axis x score;\n",
+    "only FDR<0.05 pairs are bracketed. Full pairwise table: Table_3_3C_subtype_pairwise.csv.")
+
   make_composite <- function(detailed) {
-    heat    <- .subtype_eps2_heatmap(sss, detailed)
-    violins <- make_violin_grid(detailed)
-    if (!detailed) { heat <- .strip_titles(heat); violins <- .strip_titles(violins) }
-    wrap_elements(heat) / wrap_elements(violins) +
-      plot_layout(heights = c(1.1, 3)) +
+    grid <- make_grid(detailed)
+    if (!detailed) grid <- .strip_titles(grid)
+    grid +
       plot_annotation(
-        tag_levels = "A",
-        title   = if (detailed)
-          "DTP signature scores across molecular subtypes: Marisa (GSE39582)" else NULL,
-        # The PDS caveat is NOT gated on `detailed`: the publication copy is the one
-        # that carries the per-panel KW stars (make_cell adds them only there), so it
-        # is the copy that most needs to disclose that the PDS statistic came from a
-        # 4-group test the 3-group panel does not show.
-        caption = paste0(
-          if (detailed) paste0(
-            "(A) Kruskal-Wallis eps2 of each DTP score across subtype levels, GSE39582 and TCGA-COAD.\n",
-            "(B) ssGSEA score by subtype for Marisa (violin = width-scaled; box = median/IQR); n per group on the x-axis.\n") else "",
-          "PDS \"Mixed\" is excluded from the violins; the Kruskal-Wallis eps2 / FDR shown for PDS was computed over all PDS groups incl. Mixed (N=",
-          pds_n, ")."),
+        title = if (detailed)
+          "DTP signature scores across molecular subtypes: Marisa (GSE39582) and TCGA-COAD" else NULL,
+        caption = CAP,
         theme = theme(plot.title   = element_text(face = "bold", size = 15, hjust = 0),
-                      plot.caption = element_text(size = 8, colour = "grey30", hjust = 0),
-                      plot.tag     = element_text(face = "bold", size = 16)))
+                      plot.caption = element_text(size = 8, colour = "grey30", hjust = 0)))
   }
 
-  .save_fig(make_composite(TRUE),  "Fig3_3C_marisa_subtype_violins", 10, 14, out_dir)
-  .save_fig(make_composite(FALSE), "Fig3_3C_marisa_subtype_violins", 10, 14, file.path(out_dir, "publication"))
+  .save_fig(make_composite(TRUE),  "Fig3_3C_subtype_violins", 13, 15, out_dir)
+  .save_fig(make_composite(FALSE), "Fig3_3C_subtype_violins", 13, 15, file.path(out_dir, "publication"))
 }
 
 # =============================================================================
@@ -1246,7 +1302,7 @@ if (!exists("FOREST_XLIM")) FOREST_XLIM <- c(0.1, 10)
 .PANCAN_CORR_LAB <- c(Up_ssGSEA_Corrected = "DTP Up", Down_ssGSEA_Corrected = "DTP Down",
                       Composite_ssGSEA_Corrected = "DTP Composite")
 .PANCAN_HIGHLIGHT <- "TCGA-COAD"          # colorectal tissue — locate it among the 24
-.PANCAN_ENDPT_LAB <- c(OS = "Overall survival", RFS = "Recurrence (DFS-based)")
+.PANCAN_ENDPT_LAB <- c(OS = "Overall survival", RFS = "Recurrence")
 .PANCAN_METRIC_EVT <- c(OS = "OS3Y_event", RFS = "RFS3Y_event")
 .PANCAN_METRIC_TIM <- c(OS = "OS3Y_delay", RFS = "RFS3Y_delay")
 
@@ -1330,6 +1386,10 @@ build_pancan_forest <- function(fdr, master, out_dir, score = "Up_ssGSEA",
            N = .pancan_num(N), N_events = .pancan_num(N_events))
   sd_vec <- mapply(function(pr, mt) .pancan_sd(master, pr, SCORE, mt), d$Project, d$Metric)
   d <- .pancan_rescale(d, sd_vec)
+  # Single-level row facet carrying the score name, so every panel is
+  # self-identifying (as a bold grey strip down the right edge) even after
+  # .strip_titles() drops the plot title/subtitle for the publication copy.
+  d$ScoreLab <- factor(score_lab)
 
   # Row order = ascending Up OS per-SD HR (shared helper; ggplot puts the first
   # level at the bottom, so the highest-hazard cohort lands at the top). ALL three
@@ -1382,7 +1442,7 @@ build_pancan_forest <- function(fdr, master, out_dir, score = "Up_ssGSEA",
                          aes(x = star_x, y = Project, label = "*"),
                          size = 4.6, fontface = "bold", colour = "grey15")
     p +
-      facet_grid(. ~ Metric, labeller = labeller(Metric = .PANCAN_ENDPT_LAB)) +
+      facet_grid(ScoreLab ~ Metric, labeller = labeller(Metric = .PANCAN_ENDPT_LAB)) +
       scale_x_log10(limits = FOREST_XLIM, breaks = c(0.1, 0.3, 1, 3, 10),
                     labels = c("0.1", "0.3", "1", "3", "10")) +
       scale_y_discrete(labels = function(x) ifelse(x == .PANCAN_HIGHLIGHT,
@@ -1406,7 +1466,7 @@ build_pancan_forest <- function(fdr, master, out_dir, score = "Up_ssGSEA",
             panel.spacing.x = unit(9, "pt"))
   }
 
-  .save_fig(make_fig(TRUE), save_name, 9.0, 7.8, out_dir)
+  .save_fig(make_fig(TRUE), save_name, 9.0, 8.0, out_dir)
   make_fig   # return the closure so the composite can build titled vs clean copies
 }
 
@@ -1745,7 +1805,7 @@ build_pancan_composites <- function(run_dir, out_dir = file.path(run_dir, "compo
     "(A) DTP Up, (B) DTP Composite, (C) DTP Down. Each panel is a forest of the univariable continuous-score Cox",
     sprintf("hazard ratio per 1 standard deviation of that score within each of %d solid-tumour TCGA cohorts, with 95%%", n_coh),
     "confidence interval on a log scale (truncated to [0.1, 10]), faceted by endpoint: overall survival (OS) and",
-    "recurrence (RFS, DFS-based from the TCGA-CDR disease-free interval). Red = HR > 1 (higher score, higher",
+    "recurrence (RFS, derived from the TCGA-CDR disease-free interval). Red = HR > 1 (higher score, higher",
     "hazard), blue = HR < 1; an asterisk marks FDR < 0.05; a grey \"n/t\" marks a cohort that failed the Cox gate",
     sprintf("(n >= 10 and >= 5 events; in this run: %s). All three panels share the SAME row order -- ascending DTP Up",
             .listify(nt_up, "no cohort failed the gate")),
@@ -1824,42 +1884,47 @@ build_pancan_composites <- function(run_dir, out_dir = file.path(run_dir, "compo
 # build_mets_gsea_composite()
 #
 # Four-panel composite for the mets GSEA analysis (thesis mets figure):
-#   A  Normal-vs-Primary                       all-signature enrichment plot
-#   B  Normal-vs-Primary                       NES heatmap (NES + FDR stars)
+#   A  Primary-vs-Normal                       all-signature enrichment plot
+#   B  Primary-vs-Normal                       NES heatmap (NES + FDR stars)
 #   C  Primary-vs-Metastasis, PURITY-ADJUSTED  all-signature enrichment plot
 #   D  Primary-vs-Metastasis, PURITY-ADJUSTED  NES heatmap
 #
-# Panels C/D read the liver-score-adjusted Primary-vs-Metastasis ranking: the
-# metastasis arm carries heavy hepatic signal (liver-validation figure), so the
-# metastasis-direction enrichment must be read off the adjusted fit. Panels A/B
-# (Normal-vs-Primary) have no liver tissue and stay unadjusted. The "purity-
-# adjusted" distinction lives in the C title + the D column/axis labels so it
-# survives title-stripping in the publication copy.
+# The whole figure is anchored on the primary tumour, matching the thesis
+# narrative (primary -> metastasis): panels A/B read Primary vs Normal (positive
+# NES = up in Primary) and panels C/D read Primary vs Metastasis. Panels C/D read
+# the liver-score-adjusted ranking: the metastasis arm carries heavy hepatic
+# signal (liver-validation figure), so the metastasis-direction enrichment must
+# be read off the adjusted fit. Panels A/B (Primary-vs-Normal) have no liver
+# tissue and stay unadjusted. The "purity-adjusted" distinction lives in the C
+# title + the D column/axis labels so it survives title-stripping in the
+# publication copy.
 #
 # Rebuildable from a completed run: reads the saved gseaResult objects
-# (results/gsea_NormalVsPrimary.rds + gsea_PrimaryVsMetastasis_adjusted.rds
+# (results/gsea_PrimaryVsNormal.rds + gsea_PrimaryVsMetastasis_adjusted.rds
 # written by run_mets_de). NES / FDR for the heatmaps come from as.data.frame(obj).
 # ---------------------------------------------------------------------------
 build_mets_gsea_composite <- function(mets_dir,
                                       out_dir = file.path(mets_dir, "plots", "GSEA")) {
-  np_rds <- file.path(mets_dir, "results", "gsea_NormalVsPrimary.rds")
+  pn_rds <- file.path(mets_dir, "results", "gsea_PrimaryVsNormal.rds")
   # Primary-vs-Metastasis: the purity-adjusted ranking is the primary figure.
   pm_rds <- file.path(mets_dir, "results", "gsea_PrimaryVsMetastasis_adjusted.rds")
-  if (!file.exists(np_rds) || !file.exists(pm_rds))
+  if (!file.exists(pn_rds) || !file.exists(pm_rds))
     stop("build_mets_gsea_composite(): missing gsea RDS in ",
-         file.path(mets_dir, "results"), " (need gsea_NormalVsPrimary.rds + ",
-         "gsea_PrimaryVsMetastasis_adjusted.rds; run run_mets_de first).")
-  gsea_np <- readRDS(np_rds); gsea_pm <- readRDS(pm_rds)
+         file.path(mets_dir, "results"), " (need gsea_PrimaryVsNormal.rds + ",
+         "gsea_PrimaryVsMetastasis_adjusted.rds; the Normal-vs-Primary contrast was ",
+         "re-oriented to Primary-vs-Normal, so run_mets_de() must be re-run against ",
+         "this run root before the composite can be rebuilt).")
+  gsea_pn <- readRDS(pn_rds); gsea_pm <- readRDS(pm_rds)
 
-  df_np <- as.data.frame(gsea_np); df_pm <- as.data.frame(gsea_pm)
-  if (!nrow(df_np) || !nrow(df_pm))
+  df_pn <- as.data.frame(gsea_pn); df_pm <- as.data.frame(gsea_pm)
+  if (!nrow(df_pn) || !nrow(df_pm))
     stop("build_mets_gsea_composite(): empty GSEA result(s).")
 
   # Shared signature order (top->bottom) = descending Primary-vs-Metastasis NES,
   # the headline contrast; any signature absent there is appended.
   ord       <- df_pm$ID[order(-df_pm$NES)]
-  sig_order <- c(ord, setdiff(union(df_np$ID, df_pm$ID), ord))
-  glim      <- max(abs(c(df_np$NES, df_pm$NES)), na.rm = TRUE)
+  sig_order <- c(ord, setdiff(union(df_pn$ID, df_pm$ID), ord))
+  glim      <- max(abs(c(df_pn$NES, df_pm$NES)), na.rm = TRUE)
 
   # sig_order is the UNION of the two results, so it can name a signature that one
   # object lacks (a set can drop out of one contrast and not the other). Each
@@ -1867,18 +1932,18 @@ build_mets_gsea_composite <- function(mets_dir,
   # .gsea_running_data() stop()s otherwise, which would take the whole composite AND
   # build_mets_liver_composite() (same tryCatch in run_composites) down with it. The
   # shared order is preserved; only the missing rows are omitted, and flagged.
-  np_ids <- intersect(sig_order, df_np$ID)
+  pn_ids <- intersect(sig_order, df_pn$ID)
   pm_ids <- intersect(sig_order, df_pm$ID)
-  if (length(np_ids) < length(sig_order) || length(pm_ids) < length(sig_order))
+  if (length(pn_ids) < length(sig_order) || length(pm_ids) < length(sig_order))
     message("  [mets GSEA] signature(s) absent from one contrast, omitted from that panel: ",
-            paste(setdiff(sig_order, intersect(np_ids, pm_ids)), collapse = ", "))
+            paste(setdiff(sig_order, intersect(pn_ids, pm_ids)), collapse = ", "))
 
   # A / C enrichment plots have no per-cell stats to add, so build once. B / D NES
   # heatmaps carry the per-signature stats: rebuilt inside mk() with detailed = TRUE
   # for the titled copy, detailed = FALSE for the clean publication copy.
-  A <- plot_gsea_enrichment(gsea_np, gene_set_ids = np_ids,
-         title = "Normal vs Primary: all signatures",
-         label_left = "Up in Normal", label_right = "Up in Primary")
+  A <- plot_gsea_enrichment(gsea_pn, gene_set_ids = pn_ids,
+         title = "Primary vs Normal: all signatures",
+         label_left = "Up in Primary", label_right = "Up in Normal")
   C <- plot_gsea_enrichment(gsea_pm, gene_set_ids = pm_ids,
          title = "Primary vs Metastasis, purity-adjusted for liver score: all signatures",
          label_left = "Up in Metastasis", label_right = "Up in Primary")
@@ -1888,7 +1953,7 @@ build_mets_gsea_composite <- function(mets_dir,
   # overall annotation title, so nothing survives frozen inside a wrap_elements() cell.
   mk <- function(strip) {
     detailed <- !strip
-    b <- .mets_nes_heatmap(df_np, "N / P", pos_label = "Normal", sig_order, glim, detailed)
+    b <- .mets_nes_heatmap(df_pn, "P / N", pos_label = "Primary", sig_order, glim, detailed)
     d <- .mets_nes_heatmap(df_pm, "P / M (adj)", pos_label = "Metastasis, purity-adjusted",
                            sig_order, glim, detailed)
     a <- A; cc <- C
@@ -1901,7 +1966,7 @@ build_mets_gsea_composite <- function(mets_dir,
     patchwork::plot_annotation(
       tag_levels = "A",
       title = if (strip) NULL else
-        "Mets GSEA across the Normal to Primary to Metastasis axis (metastasis arm purity-adjusted for liver score)",
+        "Mets GSEA: primary tumour vs normal mucosa and vs liver metastasis (metastasis arm purity-adjusted for liver score)",
       theme = ggplot2::theme(plot.title = if (strip) ggplot2::element_blank() else
         ggplot2::element_text(face = "bold", size = 15))) &
       ggplot2::theme(plot.tag = ggplot2::element_text(face = "bold", size = 16))

@@ -16,7 +16,7 @@ run_mets_de <- function(out_root, panel, core_signature = "UP") {
   for (d in c("results/PurityAdjusted", "results/SingleSampleDiagnostics",
               "plots/GSEA/PrimaryVsMetastasis",
               "plots/GSEA/PrimaryVsMetastasis_purityAdjusted",
-              "plots/GSEA/NormalVsPrimary",
+              "plots/GSEA/PrimaryVsNormal",
               "plots/PCA", "plots/LiverValidation", "plots/SingleSampleDiagnostics"))
     dir.create(file.path(base, d), recursive = TRUE, showWarnings = FALSE)
 
@@ -327,22 +327,25 @@ run_mets_de <- function(out_root, panel, core_signature = "UP") {
   ggplot2::ggsave(file.path(base, "plots/GSEA/Fig_Mets_GSEA_PvM_adj_vs_unadj.png"),
                   p_cmp, width = 5.5, height = 5, dpi = 300, bg = "white")
 
-  # --- Comparison 2: Normal vs Primary ----------------------------------------
+  # --- Comparison 2: Primary vs Normal ----------------------------------------
   # Extracted from the same 3-way limma fit; coefficient Tissue_for_DENormal
-  # gives Normal − Primary contrast (positive t = up in Normal).
-  message("  Running GSEA: Normal vs Primary")
-  res_np <- limma::topTable(fit, coef = "Tissue_for_DENormal",
+  # gives Normal − Primary contrast by construction (Tissue_for_DE releveled to
+  # ref = "Primary"), so negate the ranking statistic so positive = up in Primary.
+  message("  Running GSEA: Primary vs Normal")
+  res_pn <- limma::topTable(fit, coef = "Tissue_for_DENormal",
                              number = Inf, sort.by = "none") %>%
     tibble::rownames_to_column("gene") %>%
     dplyr::rename(stat = t, padj = adj.P.Val, pvalue = P.Value) %>%
-    dplyr::filter(!is.na(stat))
-  gsea_np <- .run_gsea(res_np,
-                        file.path(base, "results/GSEA_NormalVsPrimary_Summary.csv"))
-  saveRDS(gsea_np, file.path(base, "results/gsea_NormalVsPrimary.rds"))  # for the composite
-  .save_gsea_plots(gsea_np,
-                   out_dir     = file.path(base, "plots/GSEA/NormalVsPrimary"),
-                   label_left  = "Up in Normal",
-                   label_right = "Up in Primary")
+    dplyr::filter(!is.na(stat)) %>%
+    # Coefficient is Normal - Primary; negate so positive = up in PRIMARY.
+    dplyr::mutate(stat = -stat, logFC = -logFC)
+  gsea_pn <- .run_gsea(res_pn,
+                        file.path(base, "results/GSEA_PrimaryVsNormal_Summary.csv"))
+  saveRDS(gsea_pn, file.path(base, "results/gsea_PrimaryVsNormal.rds"))  # for the composite
+  .save_gsea_plots(gsea_pn,
+                   out_dir     = file.path(base, "plots/GSEA/PrimaryVsNormal"),
+                   label_left  = "Up in Primary",
+                   label_right = "Up in Normal")
 
   # The GSEA composite (build_mets_gsea_composite) and the liver-purity composite
   # are built separately by modules/composites.R (run_composites), decoupled from
@@ -411,5 +414,5 @@ run_mets_de <- function(out_root, panel, core_signature = "UP") {
   invisible(list(res = res, comparison_de = comparison_de,
                  gsea_pm = as.data.frame(gsea_pm),
                  gsea_pm_adj = as.data.frame(gsea_pm_adj),
-                 gsea_np = as.data.frame(gsea_np)))
+                 gsea_pn = as.data.frame(gsea_pn)))
 }
