@@ -1037,10 +1037,6 @@ build_subtype_violin_composite <- function(run_dir, out_dir) {
   readr::write_csv(out_tbl, file.path(out_dir, "Table_3_3C_subtype_pairwise.csv"))
   message("  wrote Table_3_3C_subtype_pairwise.csv (", nrow(out_tbl), " rows)")
 
-  # Grid columns, Axis varying fastest within a Dataset: (Marisa,CMS), (Marisa,PDS),
-  # (TCGA-COAD,CMS), (TCGA-COAD,PDS) — the 4-column layout the plan specifies.
-  cols <- expand.grid(Axis = axes, Dataset = names(clin_list), stringsAsFactors = FALSE)
-
   # Base y-range shared PER (Dataset, Score): the two cohorts sit on different
   # ssGSEA scales, so a grid-wide (or row-wide) window would flatten one of them;
   # the two axis columns of the SAME cohort+score are directly comparable, so they
@@ -1051,7 +1047,8 @@ build_subtype_violin_composite <- function(run_dir, out_dir) {
     c(rng[1] - pad, rng[2] + pad)
   }
 
-  # One violin cell. Column header (top row only) is a plot.title so it is
+  # One violin cell. Column header (top row only, axis name only — the dataset
+  # name lives in the panel header below, not here) is a plot.title so it is
   # dropped by .strip_titles for the publication copy — the CMS1-4 / PDS1-3 x
   # ticks self-identify the column; the row identity is the left-most column's
   # y-axis title, which survives stripping. Brackets are annotate() layers, so
@@ -1080,7 +1077,7 @@ build_subtype_violin_composite <- function(run_dir, out_dir) {
       scale_fill_brewer(palette = "Set2") +
       scale_x_discrete(labels = lbls) +
       coord_cartesian(ylim = c(bylim[1], br$ylim_top)) +
-      labs(title = if (is_top_row) sprintf("%s · %s", DATASET_FULL[[dataset]], axis) else NULL,
+      labs(title = if (is_top_row) axis else NULL,
            x = NULL,
            y = if (is_left_col) paste0(.CORE_LABEL[[score]], " ssGSEA") else NULL) +
       .base_theme +
@@ -1089,40 +1086,59 @@ build_subtype_violin_composite <- function(run_dir, out_dir) {
             axis.text.x = element_text(size = 7.5, lineheight = 0.85))
   }
 
-  # The 3x4 violin grid (a patchwork of the 12 cells) — no A/B panel tags; this
-  # is now the whole figure, not one panel of a taller composite.
-  make_grid <- function(detailed) {
+  # Blank canvas carrying only a bold, centered dataset name. Built with
+  # annotate() (not labs(title=)), so — like the violin brackets — it is
+  # untouched by .strip_titles() and renders identically in both copies; this
+  # is what keeps each panel self-identifying (Marisa vs TCGA-COAD) once the
+  # per-column "CMS"/"PDS" plot.title headers are stripped for publication.
+  .panel_header <- function(label) {
+    ggplot() + theme_void() +
+      annotate("text", x = 0, y = 0, label = label, fontface = "bold", size = 4.6, hjust = 0.5) +
+      theme(plot.margin = margin(t = 2, b = 4))
+  }
+
+  # One panel per dataset: a 2 (CMS/PDS) x 3 (Up/Down/Composite) violin grid
+  # under a dataset-name header. The header is added OUTSIDE .strip_titles()'s
+  # reach on `grid`, so it survives into the publication copy even though the
+  # inner column headers ("CMS"/"PDS") do not.
+  make_panel <- function(dataset, detailed) {
     cells <- list()
     for (sc in .CORE_SCORES) {
       is_top <- sc == .CORE_SCORES[[1]]
-      for (i in seq_len(nrow(cols))) {
-        is_left <- cols$Dataset[i] == names(clin_list)[[1]] && cols$Axis[i] == axes[[1]]
+      for (i in seq_along(axes)) {
         cells[[length(cells) + 1]] <- make_cell(
-          sc, cols$Dataset[i], cols$Axis[i], detailed, is_top, is_left)
+          sc, dataset, axes[[i]], detailed, is_top, is_left_col = (i == 1))
       }
     }
-    wrap_plots(cells, ncol = nrow(cols), byrow = TRUE)
+    grid <- wrap_plots(cells, ncol = length(axes), byrow = TRUE)
+    if (!detailed) grid <- .strip_titles(grid)
+    .panel_header(DATASET_FULL[[dataset]]) / grid + plot_layout(heights = c(0.045, 1))
   }
 
   CAP <- paste0(
-    "Marisa (GSE39582) and TCGA-COAD; CMS and PDS subtype axes. CMS-unclassified and PDS \"Mixed\" are excluded.\n",
+    "(A) Marisa (GSE39582); (B) TCGA-COAD. CMS and PDS subtype axes within each panel. CMS-unclassified and PDS \"Mixed\" are excluded.\n",
     "Pairwise Mann-Whitney tests with rank-biserial r, BH-corrected within each cohort x axis x score;\n",
     "only FDR<0.05 pairs are bracketed. Full pairwise table: Table_3_3C_subtype_pairwise.csv.")
 
+  # A / B panel tags are added at the outer composite (below), so — per the
+  # same convention as the mets GSEA composite — they survive .strip_titles()
+  # even though each panel's own inner grid has already been stripped above.
   make_composite <- function(detailed) {
-    grid <- make_grid(detailed)
-    if (!detailed) grid <- .strip_titles(grid)
-    grid +
+    panel_A <- wrap_elements(make_panel("GSE39582", detailed))
+    panel_B <- wrap_elements(make_panel("TCGA-COAD", detailed))
+    wrap_plots(panel_A, panel_B, ncol = 2) +
       plot_annotation(
+        tag_levels = "A",
         title = if (detailed)
           "DTP signature scores across molecular subtypes: Marisa (GSE39582) and TCGA-COAD" else NULL,
         caption = CAP,
         theme = theme(plot.title   = element_text(face = "bold", size = 15, hjust = 0),
-                      plot.caption = element_text(size = 8, colour = "grey30", hjust = 0)))
+                      plot.caption = element_text(size = 8, colour = "grey30", hjust = 0))) &
+      theme(plot.tag = element_text(face = "bold", size = 15))
   }
 
-  .save_fig(make_composite(TRUE),  "Fig3_3C_subtype_violins", 13, 15, out_dir)
-  .save_fig(make_composite(FALSE), "Fig3_3C_subtype_violins", 13, 15, file.path(out_dir, "publication"))
+  .save_fig(make_composite(TRUE),  "Fig3_3C_subtype_violins", 13, 15.5, out_dir)
+  .save_fig(make_composite(FALSE), "Fig3_3C_subtype_violins", 13, 15.5, file.path(out_dir, "publication"))
 }
 
 # =============================================================================
