@@ -6,9 +6,16 @@ cache/
 CRC_DTP_*/
 CRC_Dipci_*/
 archive/
+/results/
+
+# ── Superseded curated figures (the live copies are tracked; git history keeps
+#    the old ones, so the local STALE_* snapshots are redundant) ───────────────
+**/STALE_pre_*/
 
 # ── Thesis writing (large binaries; the .md drafts stay tracked) ───────────────
 *.docx
+/Elabd_MSc_Thesis_draft.pdf
+writing/*.pdf
 
 # ── Large intermediate R objects ───────────────────────────────────────────────
 *.rds
