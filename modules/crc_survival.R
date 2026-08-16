@@ -334,7 +334,13 @@ run_crc_survival <- function(out_root, panel, crc_signatures = NULL) {
     }
   }
 
-  adj_df <- apply_fdr(do.call(rbind, adj_rows), by = c("Dataset", "Metric", "Model"))
+  # Confounding family: BH acts on the LIKELIHOOD-RATIO p (score vs covariate-only
+  # model), not the score term's Wald p — the same nested-model test the interaction
+  # family uses, and far more stable here where the per-unit HRs are enormous (the
+  # score is a log2 ssGSEA value, so Wald SEs on log(HR) ~ 10 are unreliable).
+  # Fig 5 labels this column as the LRT FDR, so the p_col MUST stay in sync with it.
+  adj_df <- apply_fdr(do.call(rbind, adj_rows), by = c("Dataset", "Metric", "Model"),
+                      p_col = "LRT_score_P")
   write.csv(adj_df, file.path(out_root, module, "Adjusted_Cox_Summary.csv"), row.names = FALSE)
   int_df <- apply_fdr(do.call(rbind, int_rows), by = c("Dataset", "Metric", "Modifier"))
   write.csv(int_df, file.path(out_root, module, "Interaction_Cox_Summary.csv"), row.names = FALSE)
