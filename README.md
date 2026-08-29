@@ -94,7 +94,7 @@ publication figures, and `sessionInfo.txt`.
 
 Full methodological rationale, assumptions, and limitations (landmark analysis
 trade-offs, FDR framing, PDS retained as exploratory, etc.) are written up in
-the thesis itself — see `writing/Section_2_Methods.md` onward.
+the accompanying thesis document.
 
 ## Required packages
 
