@@ -89,7 +89,7 @@ run_crc_subtyping(init_run("subtyping"))
 | 16 | Shared caching / checkpoint discipline | `core/io.R`, `modules/` |
 | 17 | Primary-tumour only in both CRC and pan-cancer (metastatic fallback removed) | `core/config.R`, `core/expression.R` |
 
-## Open items (still need your decision)
+## Open items (still need decision)
 
 **#10 — FDR strategy.** This is deliberately left as you found it. `apply_fdr()`
 takes an explicit `by` grouping, and each module calls it with the key that
