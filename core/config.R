@@ -15,6 +15,7 @@ MIN_GROUP_N    <- 10          # Wilcoxon: minimum per group
 MIN_KM_GROUP_N <- 5           # KM: minimum per High/Low group
 MIN_EVENTS     <- 5           # KM/Cox: minimum events
 MIN_COX_N      <- 10          # Cox: minimum n
+MIN_EPV        <- 10          # multivariable/interaction Cox: min events-per-variable (Peduzzi 1996)
 
 # --- Cohort / coverage gates --------------------------------------------------
 MIN_COHORT_N   <- 100         # pan-cancer: min matched patients AFTER RNA-seq join
@@ -34,7 +35,7 @@ CDR_FILE     <- "Data/TCGA-CDR.csv"
 CDR_RFS_TYPE <- "PFI"
 
 # --- Inputs / cache -----------------------------------------------------------
-SIG_FILE  <- "Data/Fatemeh.csv"        # master panel; each module selects which columns it uses (#1)
+SIG_FILE  <- "Data/ML.csv"        # master panel; each module selects which columns it uses (#1)
 CACHE_DIR <- "cache"          # shared GEO/GDC object cache (#16)
 
 # --- Gene ID type -------------------------------------------------------------
@@ -46,3 +47,9 @@ ID_TYPE <- "ensembl"
 
 # --- Score naming (#12) -------------------------------------------------------
 SCORE_SUFFIX <- "_ssGSEA"     # every ssGSEA column is "<Signature>_ssGSEA"
+
+# --- Confounder / effect-modification analysis (CRC only) ---------------------
+# Core DTP scores carried into the adjusted + interaction Cox models, and the
+# clinicobiological modifiers tested as confounders / effect-modifiers.
+CORE_DTP_SCORES <- paste0(c("Up", "Down", "Composite"), SCORE_SUFFIX)
+CRC_MODIFIERS   <- c("CMS", "PDS", "Stage_bin", "MSI_group")

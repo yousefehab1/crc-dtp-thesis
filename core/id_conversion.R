@@ -98,6 +98,31 @@ harmonise_matrix_ids <- function(mat, current_type = NULL) {
                           keys = orig_ids, column = to_col, keytype = from_col,
                           multiVals = "first")
   )
+
+  # Alias fallback (symbol-keyed matrices only). Older datasets label rows with
+  # symbols HGNC has since renamed (e.g. GSE50760, 2014: SDPR->CAVIN2,
+  # HIST1H4H->H4C8, PVRL4->NECTIN4). keytype "SYMBOL" holds only the CURRENT
+  # symbol, so those rows drop out even though the gene is measured. For the
+  # unmapped residue we retry via keytype "ALIAS", accepting only aliases that
+  # resolve to exactly ONE target id — ambiguous aliases (an old symbol shared
+  # by several genes) stay dropped rather than risk a wrong assignment.
+  if (from_col == "SYMBOL" && anyNA(new_ids)) {
+    miss  <- which(is.na(new_ids))
+    resid <- orig_ids[miss]
+    al    <- suppressMessages(
+      AnnotationDbi::mapIds(org.Hs.eg.db::org.Hs.eg.db,
+                            keys = unique(resid), column = to_col,
+                            keytype = "ALIAS", multiVals = "list"))
+    al1   <- vapply(al, function(x) { x <- x[!is.na(x)]
+                    if (length(x) == 1L) x else NA_character_ }, character(1))
+    filled <- unname(al1[resid])
+    new_ids[miss] <- filled
+    n_rec <- sum(!is.na(filled))
+    if (n_rec > 0)
+      message(sprintf("  harmonise_matrix_ids: +%d rows recovered via ALIAS (renamed symbols).",
+                      n_rec))
+  }
+
   keep          <- !is.na(new_ids)
   n_lost        <- sum(!keep)
   if (n_lost > 0)

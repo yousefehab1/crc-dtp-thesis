@@ -4,6 +4,19 @@ cache/
 
 # ── Pipeline output runs ───────────────────────────────────────────────────────
 CRC_DTP_*/
+CRC_Dipci_*/
+CRC_ML_*/
+archive/
+/results/
+
+# ── Superseded curated figures (the live copies are tracked; git history keeps
+#    the old ones, so the local STALE_* snapshots are redundant) ───────────────
+**/STALE_pre_*/
+
+# ── Thesis writing (large binaries; the .md drafts stay tracked) ───────────────
+*.docx
+/Elabd_MSc_Thesis_draft.pdf
+writing/*.pdf
 
 # ── Large intermediate R objects ───────────────────────────────────────────────
 *.rds
@@ -23,5 +36,17 @@ CRC_DTP_*/
 
 # ── Misc ──────────────────────────────────────────────────────────────────────
 MANIFEST.txt
+Rplots.pdf
+~$*
 .Rapp.history
 **/.Rapp.history
+
+# ── Confidential per-sample signature/data files (do not commit) ──────────────
+Data/Fatemeh.csv
+Data/ML.csv
+Data/Sachin.csv
+Data/Sachin_fixed.csv
+Data/Updated.csv
+Data/acc.csv
+Data/final.csv
+Data/sig.csv
