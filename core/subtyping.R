@@ -1,8 +1,8 @@
 # ==============================================================================
 # core/subtyping.R  —  CMS + PDS molecular subtype callers, download-free.
 #
-# One shared code path for both the standalone crc_subtyping.R module and the
-# integrated crc_survival.R module. Classifiers are fed a LOG2, gene-SYMBOL
+# Shared code path for the integrated crc_survival.R module. Classifiers are
+# fed a LOG2, gene-SYMBOL
 # matrix built independently of the ssGSEA ID namespace (ID_TYPE) because:
 #   - CMScaller maps rownames via rowNames="symbol" to its Entrez templates;
 #   - PDSclassifier expects gene symbols.

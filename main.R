@@ -2,12 +2,15 @@
 # main.R  —  Orchestrator for the CRC DTP pipeline.
 #
 # Sources the shared core, then runs the three analysis modules against one
-# sig.csv panel and one timestamped output root. Subtyping is intentionally
-# NOT run here (decision #11) — see subtyping/crc_subtyping.R.
+# signature panel (SIG_FILE) and one timestamped output root. Molecular
+# subtyping (CMS + PDS, decision #11) is integrated into crc_survival and runs
+# automatically here via core/subtyping.R.
 #
 # Required inputs in the working directory:
-#   sig.csv       master signature panel (one column per signature; must include
+#   <SIG_FILE>    master signature panel (one column per signature; must include
 #                 the columns named below). Pan-cancer needs "Up" and "Down".
+#                 Path is set in core/config.R; confidential panels are not
+#                 committed to this repo (see .gitignore).
 #   TCGA-CDR.csv  TCGA Clinical Data Resource (Liu et al. 2018).
 #
 # Run:  Rscript main.R          (or source("main.R") in an interactive session)

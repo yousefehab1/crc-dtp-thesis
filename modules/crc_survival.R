@@ -1,12 +1,13 @@
 # ==============================================================================
 # modules/crc_survival.R  —  CRC ssGSEA & survival (GSE39582 + TCGA-COAD).
-# Was Final.R. Subtyping (CMS/CRIS/PDS) has been pulled out to
-# subtyping/crc_subtyping.R (#11) and is NOT run here.
+# Was Final.R. Molecular subtyping (CMS + PDS, #11) is integrated here via
+# core/subtyping.R, including the confounding/interaction Cox models on the
+# subtype calls.
 #
 # Fixes applied: TPM for TCGA (#2a/#2b), log-space collapse (#3), shared CDR
 # endpoint=PFI (#4), Dead/Alive labels (#5), censoring-aware endpoints (#6),
 # continuous-score Cox (#7), effect size + 3-way routing (#8), gating (#9),
-# primary-only (#17). FDR is PROVISIONAL (#10): by=Dataset×Project×Test×Metric.
+# primary-only (#17). FDR (#10) is finalized: by=Dataset×Project×Test×Metric.
 # ==============================================================================
 
 run_crc_survival <- function(out_root, panel, crc_signatures = NULL) {
