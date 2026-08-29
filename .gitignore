@@ -5,10 +5,19 @@ cache/
 # ── Pipeline output runs ───────────────────────────────────────────────────────
 CRC_DTP_*/
 CRC_Dipci_*/
+CRC_ML_*/
 archive/
+/results/
 
-# ── Thesis writing (large binaries; the .md drafts stay tracked) ───────────────
+# ── Superseded curated figures (the live copies are tracked; git history keeps
+#    the old ones, so the local STALE_* snapshots are redundant) ───────────────
+**/STALE_pre_*/
+
+# ── Thesis manuscript sources and generated figures (not distributed here) ────
 *.docx
+/Elabd_MSc_Thesis_draft.pdf
+writing/
+figures/
 
 # ── Large intermediate R objects ───────────────────────────────────────────────
 *.rds
@@ -32,3 +41,11 @@ Rplots.pdf
 ~$*
 .Rapp.history
 **/.Rapp.history
+
+# ── Confidential per-sample signature/data files (do not commit) ──────────────
+# Everything under Data/ is treated as confidential per-sample material. The
+# only exception is the public TCGA Clinical Data Resource table, which is
+# tracked deliberately. New files added to Data/ are therefore ignored by
+# default rather than needing to be listed here.
+Data/*
+!Data/TCGA-CDR.csv
