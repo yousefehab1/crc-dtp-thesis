@@ -40,3 +40,13 @@ Rplots.pdf
 ~$*
 .Rapp.history
 **/.Rapp.history
+
+# ── Confidential per-sample signature/data files (do not commit) ──────────────
+Data/Fatemeh.csv
+Data/ML.csv
+Data/Sachin.csv
+Data/Sachin_fixed.csv
+Data/Updated.csv
+Data/acc.csv
+Data/final.csv
+Data/sig.csv
