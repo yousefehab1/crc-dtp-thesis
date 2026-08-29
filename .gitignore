@@ -5,6 +5,7 @@ cache/
 # ── Pipeline output runs ───────────────────────────────────────────────────────
 CRC_DTP_*/
 CRC_Dipci_*/
+CRC_ML_*/
 archive/
 /results/
 

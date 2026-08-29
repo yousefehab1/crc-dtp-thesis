@@ -34,6 +34,8 @@ Marisa L, de Reyniès A, Duval A, Selves J, Gaub MP, Vescovo L, et al. (2013) Ge
 
 Mickey RM, Greenland S. (1989) The impact of confounder selection criteria on effect estimation. American Journal of Epidemiology 129:125–137.
 
+Mirzadeh Azad F, Luharia S, Verhagen MP, Larue A, Sessler T, Fodde R, et al. (in press) TEAD-YAP1 regulate enhancer reprogramming and adaptive cell plasticity associated with therapy resistance in colorectal cancer. Nature Communications.
+
 Mustata RC, Vasile G, Fernandez-Vallone V, Strollo S, Lefort A, Libert F, et al. (2013) Identification of Lgr5-independent spheroid-generating progenitors of the mouse fetal intestinal epithelium. Cell Reports 5:421–432.
 
 Neftel C, Laffy J, Filbin MG, Hara T, Shore ME, Rahme GJ, et al. (2019) An integrative model of cellular states, plasticity, and genetics for glioblastoma. Cell 178:835–849.
