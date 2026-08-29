@@ -32,7 +32,7 @@ Thesis/
     clinical.R           CDR loader + censoring-aware endpoint derivation
     stats.R              Wilcoxon/KM/Cox, effect size, gating, FDR, runner
     plotting.R           one theme/palette, violin/KM/forest, 3-way routing
-    subtyping.R          CMS + PDS callers, shared by crc_survival and subtyping/
+    subtyping.R          CMS + PDS callers, used by crc_survival
     gsea_plots.R         GSEA enrichment plot primitive (used by mets_de)
   modules/
     crc_survival.R
@@ -40,10 +40,6 @@ Thesis/
     pancan_treated.R      standalone pan-cancer treated-only section (§3.5-treated)
     mets_de.R
     composites.R          composite/publication figures for all modules
-  subtyping/
-    crc_subtyping.R       standalone CMS/PDS driver (subtype calls only, no survival)
-  scripts/
-    verify_signature_sources.R   ad-hoc MSigDB overlap check for the panel's gene sets
 ```
 
 ## Inputs (place in the working directory)
@@ -72,15 +68,7 @@ Rscript main.R
 
 Each run creates `CRC_DTP_YYYYMMDD_HHMM/` containing one subfolder per module
 (including molecular subtyping, run as part of `crc_survival`), the composite
-publication figures, and `sessionInfo.txt`. To get subtype calls alone,
-without the survival analysis, run the standalone driver:
-
-```r
-source("core/config.R"); source("core/io.R"); source("core/expression.R")
-source("core/scoring.R"); source("core/subtyping.R")
-source("subtyping/crc_subtyping.R")
-run_crc_subtyping(init_run("subtyping"))
-```
+publication figures, and `sessionInfo.txt`.
 
 ## Decisions applied (audit items 1–17)
 
@@ -96,7 +84,7 @@ run_crc_subtyping(init_run("subtyping"))
 | 8 | Rank-biserial effect size, `Is_Testable`, 3-way routing (significant / non_significant / not_tested) | `core/stats.R`, `core/plotting.R` |
 | 9 | Centralised gating thresholds applied identically | `core/config.R`, `core/stats.R` |
 | 10 | **FDR strategy — finalized.** Each module keeps its own per-analysis grouping (narrow families maximise power per stratum); there is no single project-wide FDR number, so the dissertation's primary confirmatory claim is defined narrowly (Up/Down/Composite vs. 3-yr OS/RFS in the main CRC cohorts) and everything built on subtype calls is reported as exploratory. | `core/stats.R` |
-| 11 | **CMS/PDS subtyping — integrated.** Shared callers in `core/subtyping.R` (both cohorts classified as already-log2, `RNAseq=FALSE`, removing the double-transform/centering-asymmetry risk); used inline by `crc_survival` for per-subtype survival cohorts and the confounding/interaction Cox models, and by the standalone `subtyping/crc_subtyping.R` driver. CRIS dropped in favour of PDS. | `core/subtyping.R`, `modules/crc_survival.R`, `subtyping/crc_subtyping.R` |
+| 11 | **CMS/PDS subtyping — integrated.** Shared callers in `core/subtyping.R` (both cohorts classified as already-log2, `RNAseq=FALSE`, removing the double-transform/centering-asymmetry risk); used inline by `crc_survival` for per-subtype survival cohorts and the confounding/interaction Cox models. CRIS dropped in favour of PDS. | `core/subtyping.R`, `modules/crc_survival.R` |
 | 12 | One score-naming convention `<Signature>_ssGSEA` | `core/scoring.R` |
 | 13 | One ggplot theme + palette | `core/plotting.R` |
 | 14 | Timestamped run root for all modules | `core/io.R` |
@@ -116,5 +104,5 @@ Bioconductor: `limma`, `GSVA`, `GSEABase`, `GEOquery`, `Biobase`,
 `SummarizedExperiment`, `AnnotationDbi`, `hgu133plus2.db`, `TCGAbiolinks`,
 `clusterProfiler`, `enrichplot`, `BiocParallel`.
 Subtyping: `CMScaller`, `PDSclassifier` (GitHub-only; pinned commit — see
-`subtyping/crc_subtyping.R`). If `PDSclassifier` is absent, PDS is skipped and
-CMS + survival still run.
+`core/subtyping.R`). If `PDSclassifier` is absent, PDS is skipped and CMS +
+survival still run.

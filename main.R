@@ -4,8 +4,7 @@
 # Sources the shared core, then runs the three analysis modules against one
 # signature panel (SIG_FILE) and one timestamped output root. Molecular
 # subtyping (CMS + PDS, decision #11) is integrated into crc_survival and runs
-# automatically here; subtyping/crc_subtyping.R remains as a standalone driver
-# for subtype calls alone, sharing the same callers in core/subtyping.R.
+# automatically here via core/subtyping.R.
 #
 # Required inputs in the working directory:
 #   <SIG_FILE>    master signature panel (one column per signature; must include
