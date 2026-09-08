@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata below."
+title: "CRC DTP Pipeline: analysis code for a colorectal cancer drug-tolerant persister signature"
+abstract: "R pipeline evaluating a colorectal cancer drug-tolerant persister (DTP) gene signature against clinical outcome, comprising ssGSEA scoring, Cox and Kaplan-Meier survival analysis across colorectal and pan-cancer TCGA cohorts, CMS and PDS molecular subtyping, and paired-tissue differential expression."
+type: software
+authors:
+  - family-names: Elabd
+    given-names: Youssef
+license: MIT
+repository-code: "https://github.com/yousefehab1/crc-dtp-thesis"
+doi: 10.5281/zenodo.22657332
+version: 1.0.1
+date-released: "2026-09-09"
+keywords:
+  - colorectal cancer
+  - drug-tolerant persister
+  - gene signature
+  - survival analysis
+  - ssGSEA
+  - TCGA
